@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Launcher for the `mem` CLI. Keeps the package importable without installing it.
+set -euo pipefail
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="$here/..${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m memlib "$@"
