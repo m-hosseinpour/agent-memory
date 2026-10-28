@@ -186,6 +186,110 @@ class ToolsListTests(McpTestCase):
         self.assertIn("memory_write", init["instructions"])
         self.assertNotIn("PROTOCOL", init["instructions"])
 
+    def test_the_param_table_matches_the_schemas(self):
+        """_TOOL_PARAMS decides what an unknown argument is, so it must not
+        drift from the published properties."""
+        self.assertEqual(
+            mcp._TOOL_PARAMS,
+            {
+                tool["name"]: set(tool["inputSchema"]["properties"])
+                for tool in mcp.TOOLS
+            },
+        )
+
+
+class UnknownArgumentTests(McpTestCase):
+    """A name outside the schema is a request error, not something to ignore.
+
+    The schemas say additionalProperties: false, so a conforming client never
+    sends one. Ignoring it turned a misspelt `cwd` into a note in the server's
+    own scope, with an ok result that looked like the intended write.
+    """
+
+    def write_arguments(self, **overrides):
+        arguments = {
+            "store": "project",
+            "path": "typo.md",
+            "content": "body",
+            "if_version": "new",
+            "name": "typo",
+            "description": "a note",
+        }
+        arguments.update(overrides)
+        return arguments
+
+    def test_misspelt_cwd_is_invalid_params_and_writes_nothing(self):
+        elsewhere = str(Path(self.tmp) / "elsewhere")
+        _, responses, _ = self.serve(
+            [
+                self.call(
+                    "memory_write",
+                    self.write_arguments(cwdd=elsewhere),
+                    request_id=1,
+                ),
+                self.request("ping", request_id=2),
+            ]
+        )
+        error = responses[0]["error"]
+        self.assertEqual(error["code"], mcp.INVALID_PARAMS)
+        self.assertIn("cwdd", error["message"])
+        self.assertIn("memory_write", error["message"])
+        self.assertFalse(self.project_dir().exists())
+        # The server keeps serving after a rejected call.
+        self.assertEqual(responses[1]["result"], {"resultType": "complete"})
+
+    def test_misspelt_path_is_invalid_params_on_read(self):
+        _, responses, _ = self.serve(
+            [
+                self.call(
+                    "memory_read",
+                    {"store": "project", "pth": "typo.md"},
+                    request_id=1,
+                )
+            ]
+        )
+        error = responses[0]["error"]
+        self.assertEqual(error["code"], mcp.INVALID_PARAMS)
+        self.assertIn("pth", error["message"])
+
+    def test_each_tool_rejects_an_argument_it_does_not_take(self):
+        for name, arguments, bad in (
+            ("memory_index", {"cwdd": self.tmp}, "cwdd"),
+            ("memory_read", {"store": "project", "path": "x.md", "extra": 1}, "extra"),
+            ("memory_write", self.write_arguments(nope=True), "nope"),
+        ):
+            _, responses, _ = self.serve([self.call(name, arguments, request_id=1)])
+            self.assertEqual(
+                responses[0]["error"]["code"],
+                mcp.INVALID_PARAMS,
+                f"{name} accepted {bad}",
+            )
+            self.assertIn(bad, responses[0]["error"]["message"])
+        self.assertFalse((self.project_dir() / "x.md").exists())
+
+    def test_the_allowed_arguments_still_work_everywhere(self):
+        self.serve(
+            [
+                self.call(
+                    "memory_write",
+                    self.write_arguments(cwd=str(self.project)),
+                    request_id=1,
+                )
+            ]
+        )
+        _, responses, _ = self.serve(
+            [
+                self.call("memory_index", {"cwd": str(self.project)}, request_id=1),
+                self.call(
+                    "memory_read",
+                    {"store": "project", "path": "typo.md", "cwd": str(self.project)},
+                    request_id=2,
+                ),
+            ]
+        )
+        self.assertEqual(self.payload(responses[0])["count"], 1)
+        self.assertEqual(self.payload(responses[1])["content"], "body")
+
 
 class ReadWriteTests(McpTestCase):
     def write_new(self, path="pnpm-not-npm.md", **overrides):
@@ -725,6 +829,8 @@ class IndexToolTests(McpTestCase):
         self.assertEqual(
             Path(written["file"]).parent, config.scope_dir("project", str(other))
         )
+        # MEMORY_PROJECT_CWD is only the fallback: the explicit cwd wins.
+        self.assertFalse((self.project_dir() / "elsewhere.md").exists())
 
     def test_write_consolidates_the_scope(self):
         self.serve(

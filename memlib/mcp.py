@@ -631,9 +631,15 @@ class _Server:
             arguments = {}
         if not isinstance(arguments, dict):
             raise InvalidParams("invalid params: arguments must be an object")
+        # The schemas say additionalProperties: false, so a conforming client
+        # never sends an unknown name. Dropping one silently turned a misspelt
+        # `cwd` into a write in the server's own scope instead of the caller's.
         unknown = sorted(set(arguments) - _TOOL_PARAMS[name])
         if unknown:
-            _log(f"ignoring unknown arguments for {name}: {', '.join(unknown)}")
+            raise InvalidParams(
+                f"invalid params: unknown argument(s) for {name}: "
+                + ", ".join(repr(argument) for argument in unknown)
+            )
 
         try:
             return _HANDLERS[name](arguments)
