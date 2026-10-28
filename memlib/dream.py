@@ -416,7 +416,18 @@ def _git_commit(root: Path, message: str) -> bool:
         )
     except (OSError, subprocess.SubprocessError):
         return False
-    return finished.returncode == 0
+    if finished.returncode != 0:
+        # Not silent: a missing git identity is the usual cause, and the pass
+        # would otherwise keep reporting success while its history stopped
+        # growing and left the tree staged.
+        detail = (finished.stderr or finished.stdout or "").strip().splitlines()
+        sys.stderr.write(
+            "mem dream: git commit failed: {}\n".format(
+                detail[-1] if detail else "no output"
+            )
+        )
+        return False
+    return True
 
 
 def _commit_message(stats: Stats) -> str:

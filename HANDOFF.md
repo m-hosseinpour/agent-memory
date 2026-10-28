@@ -137,7 +137,7 @@ modify the four P0 modules without saying so.
   the install step below.
 
 Note on P0/P1 docs above: the "expected ImportError" comment and the P1 test count describe
-the tree as it was then. The suite is 184 tests now (the 7 added in `872d0bf` came after
+the tree as it was then. The suite is 185 tests now (the 7 added in `872d0bf` came after
 P2 and the counts in this file were not swept then).
 
 ## Install state (2026-10-28)
@@ -161,7 +161,13 @@ Done, on this machine:
   this when the package declares `dsh.bundle.patch` — the README used to say to do it by
   hand). `dsh --profile web --dump-config` shows the composed `memory` row. The running
   harness at `127.0.0.1:3080` was started before this, so a restart loads it there; HMR is
-  enabled, so the plugin-manager operation may already have applied.
+  enabled, so the plugin-manager operation may already have applied. It **is** loaded: the
+  `memory_read` / `memory_write` / `memory_search` tools ran against the real store, and a
+  note written through them appeared in `global/MEMORY.md` and in the SessionStart injection.
+- The store repository got a **local git identity** (`mem <mem@localhost>`): this machine has
+  no global one, so `git commit` failed and `mem dream` reported `commits: 0` while leaving
+  the tree staged. `mem dream --force` now commits (`34841da`), the tree is clean, and a
+  failed commit prints a warning instead of passing silently.
 - Extraction is **off** (`enabled = false`), as decided.
 
 Still to do:

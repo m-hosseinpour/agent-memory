@@ -106,6 +106,12 @@ records one line in `dream.log` for every run that actually consolidates, and �
 store is a git repository — commits before and after the pass. It is deterministic (no model
 call) and idempotent: a second run changes nothing.
 
+The commits need a git identity. If the repository has none (no `user.name`/`user.email` in
+the repo or globally), `git commit` fails; the pass then says so on stderr instead of
+reporting success while the history stays frozen and the tree stays staged. On a store you
+care about, set one locally: `git -C $MEM_ROOT config user.name mem` and
+`git -C $MEM_ROOT config user.email mem@localhost`.
+
 ## Layout
 
 ```
@@ -120,7 +126,7 @@ memlib/dream.py      consolidation: dedupe, replace, index repair, git commits
 memlib/extract.py    transcript readers + one model call + write-through
 PROTOCOL.md          the agent-facing contract (copied into the store root)
 docs/                research.md, design.md, roadmap.md — the background, kept in-repo
-tests/               unittest (stdlib only), 184 tests
+tests/               unittest (stdlib only), 185 tests
 integrations/opencode/  opencode V2 plugin (session.idle, compaction hook)
 integrations/dsh/       cordis plugin (prompt section, pre-step, turn-stopping, tools)
 install/             merge fragments: claude-code.json, mcp.json, opencode.json, agents-md.md

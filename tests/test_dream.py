@@ -436,6 +436,31 @@ class GitTests(DreamTestCase):
         self.assertEqual(out["commits"], 0)
         self.assertFalse((self.root / ".gitignore").exists())
 
+    def test_a_failed_commit_is_reported_instead_of_swallowed(self):
+        """A missing git identity is the usual cause; silence hides a dead history."""
+        import subprocess as sp
+
+        (self.root / ".git").mkdir(exist_ok=True)
+
+        def fake_git(root, args):
+            if args[:1] == ["rev-parse"]:
+                return sp.CompletedProcess(args, 0, str(root), "")
+            if "commit" in args:
+                return sp.CompletedProcess(args, 1, "", "Author identity unknown")
+            if args[:2] == ["diff", "--cached"]:
+                return sp.CompletedProcess(args, 1, "", "")  # something is staged
+            return sp.CompletedProcess(args, 0, "", "")
+
+        stderr = io.StringIO()
+        with mock.patch("memlib.dream._git", side_effect=fake_git), mock.patch(
+            "sys.stderr", stderr
+        ):
+            committed = dream._git_commit(self.root, "dream: test")
+
+        self.assertFalse(committed)
+        self.assertIn("git commit failed", stderr.getvalue())
+        self.assertIn("Author identity unknown", stderr.getvalue())
+
 
 class HookTriggerTests(DreamTestCase):
     def payload(self, event="session-start"):
