@@ -246,6 +246,18 @@ def list_memories(directory: Path) -> list[Memory]:
     return memories
 
 
+# Every character `str.splitlines()` treats as a line boundary, which is what
+# `parse` uses. A line break of any kind ends the scalar early and leaves the
+# rest of the value inside the frontmatter block.
+_LINE_BREAKS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+
+
+def _single_line(value: str, field: str) -> None:
+    """Frontmatter is parsed line by line, so a quoted scalar must stay on one."""
+    if any(ch in _LINE_BREAKS for ch in value):
+        raise StoreError(f"{field} must be a single line (it contains a line break)")
+
+
 def check_filename(filename: str) -> str:
     if (
         "/" in filename
@@ -285,8 +297,18 @@ def write(
     caller passes a different value. For a new file they fall back to the
     filename stem, an empty description and `project`. An explicit empty
     description clears it; a blank name falls back instead of blanking the file.
+    `name`, `description` and `session_id` must be one line: the frontmatter
+    is parsed line by line, so a line break is refused before anything is written.
     """
     check_filename(filename)
+    # Refuse before touching the directory: a rejected write must leave no file
+    # and no newly created scope behind.
+    if name is not None:
+        _single_line(name, "name")
+    if description is not None:
+        _single_line(description, "description")
+    if session_id is not None:
+        _single_line(session_id, "session id")
     if if_version is None and not force:
         raise StoreError("if_version is required (pass the version from read, or 'new')")
 

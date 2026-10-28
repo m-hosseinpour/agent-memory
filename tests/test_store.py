@@ -100,6 +100,69 @@ class WriteTests(unittest.TestCase):
         with self.assertRaises(store.StoreError):
             store.write(self.dir, "a.md", "body", if_version="new", memory_type="gotcha")
 
+    def test_a_line_break_in_description_or_name_is_refused(self):
+        # The frontmatter is parsed line by line: the 0.2.0 bug wrote a value
+        # cut at the break and left the rest of it inside the block.
+        for field in ("description", "name"):
+            for value in (
+                "multi\nline",
+                "multi\rline",
+                "multi\r\nline",
+                "multi\u2028line",
+                "multi\x0bline",
+                "trailing\n",
+            ):
+                with self.subTest(field=field, value=value):
+                    with self.assertRaises(store.StoreError):
+                        store.write(
+                            self.dir, "a.md", "body", if_version="new", **{field: value}
+                        )
+                    self.assertFalse((self.dir / "a.md").exists())
+
+    def test_a_line_break_in_the_session_id_is_refused(self):
+        # originSessionId is a frontmatter scalar too, so it breaks the same way.
+        with self.assertRaises(store.StoreError):
+            store.write(self.dir, "a.md", "body", session_id="a\nb", if_version="new")
+        self.assertFalse((self.dir / "a.md").exists())
+
+    def test_a_refused_line_break_leaves_the_note_untouched(self):
+        first = store.write(self.dir, "u.md", "x", description="before", if_version="new")
+        raw = (self.dir / "u.md").read_bytes()
+        with self.assertRaises(store.StoreError):
+            store.write(
+                self.dir, "u.md", "y", description="after\nline", if_version=first.version
+            )
+        self.assertEqual((self.dir / "u.md").read_bytes(), raw)
+
+    def test_line_free_values_round_trip(self):
+        values = (
+            "",
+            "plain",
+            'with "quotes"',
+            "back\\slash",
+            "tab\there",
+            "colon: dash - and ---",
+            "  padded  ",
+            "متن فارسی",
+            "emoji 🙂",
+        )
+        for index, value in enumerate(values):
+            with self.subTest(value=value):
+                name = f"n{index}"
+                filename = f"{name}.md"
+                created = store.write(
+                    self.dir,
+                    filename,
+                    "b",
+                    name=name,
+                    description=value,
+                    if_version="new",
+                )
+                loaded = store.load(self.dir / filename)
+                self.assertEqual((loaded.name, loaded.description), (name, value))
+                again = store.write(self.dir, filename, "b2", if_version=created.version)
+                self.assertEqual(again.description, value)
+
     def test_rewrite_keeps_fields_the_caller_did_not_pass(self):
         # The 0.2.0 bug: a body-only rewrite reset name, description and type.
         first = store.write(

@@ -129,6 +129,17 @@ class WriteContractTests(CliTestCase):
         self.assertEqual(code, 1)
         self.assertEqual((data["ok"], data["error"]), (False, "invalid"))
 
+    def test_a_line_break_in_the_description_is_invalid(self):
+        code, data = self.json_cli(
+            *self.write_args(
+                "note.md", content="body", if_version="new", description="one\ntwo"
+            )
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual((data["ok"], data["error"]), (False, "invalid"))
+        # Refused before the scope directory is created, not just before the file.
+        self.assertFalse(self.project_dir().exists())
+
     def test_secret_is_exit_3(self):
         code, data = self.json_cli(
             *self.write_args("leak.md", content="api_key: sk-" + "a" * 24, if_version="new")

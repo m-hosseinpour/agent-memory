@@ -20,7 +20,7 @@ from .store import TYPES, Memory, list_memories
 
 def line_for(memory: Memory, prefix: str = "") -> str:
     target = f"{prefix}{memory.filename}"
-    description = memory.description.replace("\n", " ").strip()
+    description = memory.description.strip()
     return f"- [{memory.title}]({target}) — {description}" if description else f"- [{memory.title}]({target})"
 
 

@@ -110,9 +110,9 @@ returning. The rules are deterministic — no model call:
 - two files of the same type with the same `name` are one note; the newer `modified` wins and
   the older file is removed (its body is **not** merged);
 - two files of the same type whose descriptions use the same words are duplicates: word Jaccard
-  0.95 over one-line descriptions (at most 19 distinct words), where only an identical word set
-  can reach it. The older's unique lines are appended to the newest body, then the older file is
-  removed; a description longer than one line is never merged on similarity;
+  0.95 over descriptions of at most 19 distinct words, where only an identical word set can reach
+  it. The older's unique lines are appended to the newest body, then the older file is removed; a
+  description with more distinct words is never merged on similarity;
 - `MEMORY.md` is rebuilt from the files, so a line for a deleted file cannot survive.
 
 A pass deletes a file only while its bytes still match what it read, and writes a merged keeper
@@ -120,9 +120,9 @@ with the version it read, so a concurrent agent either wins cleanly or leaves bo
 next pass. The pass is idempotent: running it twice changes nothing. `mem dream` runs it by hand
 (`--all` for every project).
 
-A description longer than one line is not compared for similarity at all: above 19 words the same
-0.95 would begin to accept a qualifier, so two notes that long are left apart rather than guessed
-at (the same-`name` rule still applies).
+A description with more than 19 distinct words is not compared for similarity at all: at that
+size the same 0.95 would begin to accept a qualifier, so two notes that long are left apart rather
+than guessed at (the same-`name` rule still applies).
 
 A restatement in other words is **not** merged, and rename-and-contradict is **not** detected —
 the same fact under a different `name` or in a differently worded `description` stays as two
@@ -177,6 +177,9 @@ python3 -m unittest discover -s tests -v
   cannot move a note to another section of the index. An empty `--description` clears the
   description; an empty `--name` keeps the current one. The store writes exactly three
   frontmatter keys (`name`, `description`, `metadata`) and drops any other hand-written key.
+- **`name` and `description` are one line.** A line break in either is refused before anything
+  is written: the frontmatter is parsed line by line, so a value with a break would be cut there.
+  Multiple lines belong in the body.
 - **Schema is Claude Code's**: four types (`user`, `feedback`, `project`, `reference`), the same
   frontmatter keys. No extra fields.
 - **Concurrency rests on the version token, held under a short-lived lock.** `write` and `delete`

@@ -524,6 +524,21 @@ class ReadWriteTests(McpTestCase):
         self.assertIn("secret", failure["message"])
         self.assertFalse((self.project_dir() / "pnpm-not-npm.md").exists())
 
+    def test_a_line_break_in_the_description_is_invalid(self):
+        _, responses, _ = self.serve(
+            [
+                self.call(
+                    "memory_write",
+                    self.write_new(description="one\ntwo"),
+                    request_id=1,
+                )
+            ]
+        )
+        failure = self.error_payload(responses[0])
+        self.assertEqual(failure["error"], "invalid")
+        self.assertIn("single line", failure["message"])
+        self.assertFalse((self.project_dir() / "pnpm-not-npm.md").exists())
+
     def test_store_error_is_an_iserror_result(self):
         _, responses, _ = self.serve(
             [
