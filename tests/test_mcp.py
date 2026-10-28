@@ -149,17 +149,23 @@ class ToolsListTests(McpTestCase):
         _, responses, _ = self.serve([self.request("tools/list")])
         tools = {tool["name"]: tool for tool in responses[0]["result"]["tools"]}
         self.assertEqual(
-            sorted(tools), ["memory_read", "memory_search", "memory_write"]
+            sorted(tools), ["memory_index", "memory_read", "memory_write"]
         )
         for tool in tools.values():
             schema = tool["inputSchema"]
             self.assertEqual(schema["type"], "object")
             self.assertFalse(schema["additionalProperties"])
-            self.assertNotIn("cwd", schema["properties"])
+            # A client that serves several projects cannot be told which one
+            # otherwise; the argument is optional everywhere.
+            self.assertIn("cwd", schema["properties"])
+            self.assertNotIn("cwd", schema.get("required", []))
+
+        index_tool = tools["memory_index"]["inputSchema"]
+        self.assertEqual(set(index_tool["properties"]), {"cwd"})
 
         read = tools["memory_read"]["inputSchema"]
         self.assertEqual(read["required"], ["store", "path"])
-        self.assertEqual(set(read["properties"]), {"store", "path"})
+        self.assertEqual(set(read["properties"]), {"store", "path", "cwd"})
 
         write = tools["memory_write"]["inputSchema"]
         self.assertEqual(
@@ -167,15 +173,18 @@ class ToolsListTests(McpTestCase):
         )
         self.assertEqual(
             set(write["properties"]),
-            {"store", "path", "content", "if_version", "name", "description", "type"},
+            {"store", "path", "content", "if_version", "name", "description", "type", "cwd"},
         )
         self.assertEqual(write["properties"]["store"]["enum"], ["global", "project"])
         self.assertEqual(write["properties"]["type"]["enum"], list(store.TYPES))
 
-        search = tools["memory_search"]["inputSchema"]
-        self.assertEqual(search["required"], ["query"])
-        self.assertEqual(set(search["properties"]), {"query", "top_k"})
-        self.assertEqual(search["properties"]["top_k"]["minimum"], 1)
+        # The instructions are the whole onboarding: no instruction file exists.
+        init = self.serve(
+            [self.request("initialize", {"protocolVersion": "2025-06-18"})]
+        )[1][0]["result"]
+        self.assertIn("memory_index", init["instructions"])
+        self.assertIn("memory_write", init["instructions"])
+        self.assertNotIn("PROTOCOL", init["instructions"])
 
 
 class ReadWriteTests(McpTestCase):
@@ -484,8 +493,8 @@ class ProtocolTests(McpTestCase):
                 self.call("memory_forget", {}, request_id=1),
                 self.call("memory_write", {"store": "project", "path": "x.md"}, request_id=2),
                 self.call(
-                    "memory_search",
-                    {"query": "x", "top_k": "two"},
+                    "memory_read",
+                    {"store": "project", "path": 7},
                     request_id=3,
                 ),
             ]
@@ -495,7 +504,7 @@ class ProtocolTests(McpTestCase):
             self.assertEqual(response["error"]["code"], mcp.INVALID_PARAMS)
         self.assertIn("unknown tool", responses[0]["error"]["message"])
         self.assertIn("content", responses[1]["error"]["message"])
-        self.assertIn("top_k", responses[2]["error"]["message"])
+        self.assertIn("path", responses[2]["error"]["message"])
 
     def test_eof_returns_zero_and_an_unterminated_last_line_still_runs(self):
         code, responses, _ = self.serve(raw="")
@@ -522,98 +531,123 @@ class ProtocolTests(McpTestCase):
         self.assertIn("mem mcp:", stderr)
 
 
-class SearchTests(McpTestCase):
+class IndexToolTests(McpTestCase):
+    """memory_index is the whole retrieval path: it lists every note."""
+
+    def write(self, path, name, description, store="project", body="body", **extra):
+        arguments = {
+            "store": store,
+            "path": path,
+            "content": body,
+            "if_version": "new",
+            "name": name,
+            "description": description,
+        }
+        arguments.update(extra)
+        return arguments
+
     def seed(self):
         self.serve(
             [
                 self.call(
                     "memory_write",
-                    {
-                        "store": "project",
-                        "path": "pnpm-not-npm.md",
-                        "content": "The lockfile is pnpm.",
-                        "if_version": "new",
-                        "name": "pnpm-not-npm",
-                        "description": "the lockfile is pnpm; npm install breaks CI",
-                    },
+                    self.write(
+                        "pnpm-not-npm.md",
+                        "pnpm-not-npm",
+                        "the lockfile is pnpm; npm install breaks CI",
+                        body="The lockfile is pnpm.",
+                    ),
                     request_id=1,
                 ),
                 self.call(
                     "memory_write",
-                    {
-                        "store": "project",
-                        "path": "kde-fontconfig.md",
-                        "content": "Chromium poisons the fontconfig cache.",
-                        "if_version": "new",
-                        "name": "kde-fontconfig",
-                        "description": "chromium poisons the fontconfig cache",
-                    },
+                    self.write(
+                        "kde-fontconfig.md",
+                        "kde-fontconfig",
+                        "chromium poisons the fontconfig cache",
+                        body="Chromium poisons the fontconfig cache.",
+                    ),
                     request_id=2,
                 ),
                 self.call(
                     "memory_write",
-                    {
-                        "store": "global",
-                        "path": "prefers-vim.md",
-                        "content": "Prefers vim keybindings.",
-                        "if_version": "new",
-                        "name": "prefers-vim",
-                        "description": "vim keybindings everywhere",
-                    },
+                    self.write(
+                        "prefers-vim.md",
+                        "prefers-vim",
+                        "vim keybindings everywhere",
+                        store="global",
+                        body="Prefers vim keybindings.",
+                    ),
                     request_id=3,
                 ),
             ]
         )
 
-    def test_search_answers_explicitly_below_the_threshold(self):
+    def test_index_lists_both_stores(self):
         self.seed()
-        # Default select_threshold is 40 candidates; a tool call is explicit, so
-        # the three-memory store is still searched.
-        _, responses, _ = self.serve(
-            [self.call("memory_search", {"query": "pnpm lockfile"}, request_id=1)]
-        )
+        _, responses, _ = self.serve([self.call("memory_index", {}, request_id=1)])
         result = self.payload(responses[0])
-        self.assertEqual(result["query"], "pnpm lockfile")
-        self.assertEqual(result["count"], 1)
-        hit = result["hits"][0]
-        self.assertEqual(hit["store"], "project")
-        self.assertEqual(hit["path"], "pnpm-not-npm.md")
-        self.assertEqual(hit["title"], "Pnpm not npm")
-        self.assertEqual(hit["description"], "the lockfile is pnpm; npm install breaks CI")
-        self.assertEqual(hit["type"], "project")
-        self.assertGreater(hit["relevance"], 0)
+        self.assertEqual(result["count"], 3)
+        self.assertIn("# global memory", result["index"])
+        self.assertIn("# project memory", result["index"])
+        self.assertIn("pnpm-not-npm.md", result["index"])
+        self.assertIn("prefers-vim.md", result["index"])
+        self.assertIn("the lockfile is pnpm", result["index"])
 
-    def test_search_spans_global_and_project(self):
-        self.seed()
-        _, responses, _ = self.serve(
-            [self.call("memory_search", {"query": "vim keybindings"}, request_id=1)]
-        )
-        result = self.payload(responses[0])
-        self.assertEqual(result["count"], 1)
-        self.assertEqual(result["hits"][0]["store"], "global")
-
-    def test_search_without_matches_is_an_empty_success(self):
-        self.seed()
-        _, responses, _ = self.serve(
-            [self.call("memory_search", {"query": "kubernetes ingress"}, request_id=1)]
-        )
+    def test_index_on_an_empty_store(self):
+        _, responses, _ = self.serve([self.call("memory_index", {}, request_id=1)])
         result = self.payload(responses[0])
         self.assertEqual(result["count"], 0)
-        self.assertEqual(result["hits"], [])
+        self.assertEqual(result["index"], "")
 
-    def test_search_honours_top_k(self):
+    def test_index_honours_an_explicit_cwd(self):
         self.seed()
+        other = Path(self.tmp) / "other"
+        other.mkdir()
         _, responses, _ = self.serve(
+            [self.call("memory_index", {"cwd": str(other)}, request_id=1)]
+        )
+        result = self.payload(responses[0])
+        # The project scope moved; the global scope did not.
+        self.assertEqual(result["count"], 1)
+        self.assertNotIn("pnpm-not-npm.md", result["index"])
+        self.assertIn("prefers-vim.md", result["index"])
+
+    def test_write_honours_an_explicit_cwd(self):
+        other = Path(self.tmp) / "other"
+        arguments = self.write(
+            "elsewhere.md", "elsewhere", "a note for another project", cwd=str(other)
+        )
+        _, responses, _ = self.serve(
+            [self.call("memory_write", arguments, request_id=1)]
+        )
+        written = self.payload(responses[0])
+        self.assertEqual(
+            Path(written["file"]).parent, config.scope_dir("project", str(other))
+        )
+
+    def test_write_consolidates_the_scope(self):
+        self.serve(
             [
                 self.call(
-                    "memory_search",
-                    {"query": "lockfile fontconfig vim", "top_k": 1},
+                    "memory_write",
+                    self.write("a.md", "shared", "same note"),
                     request_id=1,
                 )
             ]
         )
-        result = self.payload(responses[0])
-        self.assertEqual(result["count"], 1)
+        _, responses, _ = self.serve(
+            [
+                self.call(
+                    "memory_write",
+                    self.write("b.md", "shared", "same note"),
+                    request_id=1,
+                )
+            ]
+        )
+        self.payload(responses[0])
+        self.assertFalse((self.project_dir() / "a.md").exists())
+        self.assertTrue((self.project_dir() / "b.md").exists())
 
 
 class DiscoveryTests(McpTestCase):
@@ -641,7 +675,7 @@ class DiscoveryTests(McpTestCase):
                     "jsonrpc": "2.0",
                     "id": 3,
                     "method": "tools/call",
-                    "params": {"name": "memory_search", "arguments": {"query": "anything"}},
+                    "params": {"name": "memory_index", "arguments": {}},
                 },
             ]
         )
@@ -649,7 +683,7 @@ class DiscoveryTests(McpTestCase):
         self.assertEqual([r["id"] for r in responses], [1, 2, 3])
         self.assertEqual(
             {tool["name"] for tool in responses[1]["result"]["tools"]},
-            {"memory_read", "memory_write", "memory_search"},
+            {"memory_index", "memory_read", "memory_write"},
         )
         self.assertFalse(responses[2]["result"]["isError"])
 

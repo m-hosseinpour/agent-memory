@@ -1,146 +1,150 @@
 # agent-memory
 
-A memory store shared by several coding agents (DSH, opencode, Claude Code, Qoder), so
-that what one of them learns is available to the others.
+A memory store shared by coding agents through one MCP server. Plain markdown on disk, one
+note per memory, indexed by a `MEMORY.md` table of contents — the same shape Claude Code and
+Qoder use, so the data stays readable by hand, by `grep`, and by those tools.
 
-Plain markdown on disk, one file per memory, indexed by a `MEMORY.md` table of contents —
-the same shape Claude Code and Qoder already use, so the data stays readable by hand, by
-`grep`, and by those tools. The `mem` CLI is the only place logic lives; every agent
-adapter is a thin caller of it.
+The `mem` package holds every rule: the store, the index, consolidation, the MCP server. The
+CLI and the MCP server are two front doors to the same code. Any agent with an MCP client
+shares the same notes, with no per-agent plugin or hook to install and no instruction file to
+maintain.
 
-Design and research behind it: [`docs/`](docs/) — `research.md` (how Claude Code and Qoder
-actually work, and which claims are verified), `design.md` (the design, with the decisions
-and the alternatives that were dropped), `roadmap.md` (the phase plan and its acceptance
-criteria).
+Background and rationale: [`docs/`](docs/) — `research.md` (how Claude Code and Qoder actually
+work, and which claims are verified), `design.md` (the design and the alternatives dropped),
+`roadmap.md` (the phase plan, kept as history).
 
 ## Status
 
-P0–P2 are implemented: the store, index, versioned writes, lexical recall, the CLI, the
-four adapters (Claude Code hooks, the MCP stdio server, the opencode V2 plugin, the DSH
-plugin), and one background pass — `mem dream` (session-counted consolidation, which the
-SessionStart hook spawns once the counter reaches `dream.every_sessions`).
+0.2.0. Retrieval *is* the index: no keyword search, no model call, and nothing injected behind
+the agent's back. `memory_index` returns the whole table of contents, `memory_read` loads one
+note, and `memory_write` saves one — then consolidates the store before it returns, so there is
+no queued state and no background pass.
 
-End-of-session extraction (`mem extract`) existed through P2 and was **removed**: neither
-Claude Code nor Qoder runs such a pass, and it was not wanted here. Nothing writes memories
-behind the agent's back now — the agent writes with `memory_write`, and `dream` only
-consolidates what is already there.
-
-The store is installed on this machine (`~/.agents/memory`) and wired into all four agents:
-Claude Code (hooks + MCP), opencode (plugin + MCP), and DSH, whose plugin is installed into
-the `web` profile as a linked package and a selected bundle.
+The store lives at `~/.agents/memory` and is wired into Claude Code, opencode and DSH by
+registering the MCP server (below). It is installed once with `uv tool install`, so every agent
+calls the same `mem` on `PATH` rather than a path inside this checkout.
 
 ## Usage
 
 ```bash
-export MEM_ROOT=~/.agents/memory          # default; set it explicitly when testing
-
-# create (version token comes back for the next write)
-./bin/mem write --scope project --cwd "$PWD" --path pnpm-not-npm.md \
+mem write --scope project --cwd "$PWD" --path pnpm-not-npm.md \
   --name pnpm-not-npm --description "the lockfile is pnpm; npm install breaks CI" \
-  --if-version new --session "$SESSION_ID" <<'EOF'
+  --if-version new <<'EOF'
 The lockfile is pnpm. `npm install` rewrites it and breaks CI.
 EOF
 
-./bin/mem read   --scope project --cwd "$PWD" --path pnpm-not-npm.md
-./bin/mem list   --scope project --cwd "$PWD"
-./bin/mem index  --cwd "$PWD"                 # what gets injected into a prompt
-./bin/mem recall "lockfile" --cwd "$PWD"      # only above select_threshold memories
-./bin/mem forget --scope project --cwd "$PWD" --path pnpm-not-npm.md
-
-# adapters
-./bin/mem hook session-start < payload.json   # Claude Code hook (JSON in, JSON out)
-./bin/mem mcp                                 # MCP server on stdio
-
-# consolidation
-./bin/mem dream --cwd "$PWD"                  # consolidate global + this project
-./bin/mem dream --all                         # every project scope
-./bin/mem dream --force                       # ignore the session counter
+mem read   --scope project --cwd "$PWD" --path pnpm-not-npm.md
+mem list   --scope project --cwd "$PWD"
+mem index  --cwd "$PWD"                 # the table of contents, both scopes
+mem forget --scope project --cwd "$PWD" --path pnpm-not-npm.md
+mem dream  --cwd "$PWD"                 # a manual consolidation pass
+mem dream  --all                        # every project scope
+mem mcp                                 # the MCP server on stdio
 ```
 
-Exit codes: `0` ok, `1` invalid input, `2` version conflict (current content is returned so
+Exit codes: `0` ok, `1` invalid input, `2` version conflict (the current content is returned so
 the caller can merge), `3` content looked like a secret and was refused.
 
-## Configuration
+## MCP
 
-`$MEM_ROOT/config.toml` (all keys optional):
+Register the server once per agent; there is nothing else to install per agent.
 
-```toml
-[context]
-index_max_lines = 200            # cap on the injected index block
-
-[recall]
-select_threshold = 40            # below this many memories, recall never runs
-top_k = 8
-
-[dream]
-every_sessions = 5               # session counter that triggers consolidation
+```json
+// Claude Code: ~/.claude.json (user scope), or `claude mcp add mem mem mcp --scope user`
+{ "mcpServers": { "mem": { "command": "mem", "args": ["mcp"] } } }
 ```
 
-`mem dream` merges notes of the same type whose descriptions are near-identical, lets the
-newer of two notes with the same name *and* type replace the older, repairs `MEMORY.md`,
-records one line in `dream.log` for every run that actually consolidates, and — when the
-store is a git repository — commits before and after the pass. It is deterministic (no model
-call) and idempotent: a second run changes nothing.
-
-The commits need a git identity. If the repository has none (no `user.name`/`user.email` in
-the repo or globally), `git commit` fails; the pass then says so on stderr instead of
-reporting success while the history stays frozen and the tree stays staged. On a store you
-care about, set one locally: `git -C $MEM_ROOT config user.name mem` and
-`git -C $MEM_ROOT config user.email mem@localhost`.
-
-## Layout
-
+```json
+// opencode: ~/.config/opencode/opencode.json
+{ "mcp": { "servers": { "mem": { "type": "local", "command": ["mem", "mcp"], "enabled": true } } } }
 ```
-bin/mem              launcher (python3 -m memlib, no install needed)
-memlib/store.py      files, frontmatter, version tokens, conflicts, secret refusal, recall
-memlib/index.py      MEMORY.md generation and budget capping
-memlib/config.py     root, config.toml subset, scope directories
-memlib/cli.py        argparse surface
-memlib/hooks.py      Claude Code hook adapter + the session counter (spawns dream)
-memlib/mcp.py        MCP stdio server: memory_read / memory_write / memory_search
-memlib/dream.py      consolidation: dedupe, replace, index repair, git commits
-PROTOCOL.md          the agent-facing contract (copied into the store root)
-docs/                research.md, design.md, roadmap.md — the background, kept in-repo
-tests/               unittest (stdlib only), 149 tests
-integrations/opencode/  opencode V2 plugin (compaction hook)
-integrations/dsh/       cordis plugin (prompt section, pre-step, tools)
-install/             merge fragments: claude-code.json, mcp.json, opencode.json, agents-md.md
+
+```yaml
+# DSH: ~/.dsh/cordis.patch.yml (rewrite the file live, no restart needed)
+- insert:
+    - id: mcp-mem
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: mem
+        transport: stdio
+        command: mem
+        args: ['mcp']
 ```
+
+Tools:
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `memory_index` | `cwd?` | the table of contents of the global and the project store |
+| `memory_read` | `store`, `path`, `cwd?` | body, version, modified, type, description |
+| `memory_write` | `store`, `path`, `content`, `if_version`, `name?`, `description?`, `type?`, `cwd?` | the new version; consolidates the store first |
+
+The server's usage contract — the four types, what not to save, `if_version` — travels in the
+MCP `instructions` field of `initialize` / `server/discover`, which is what that field is for.
+No `AGENTS.md` section is needed.
+
+`cwd` exists for clients that run one server for several projects (DSH does); a per-project
+client can omit it and the server uses its own working directory.
+
+## Install
+
+```bash
+uv tool install .                        # puts `mem` on PATH, isolated from the system Python
+uv tool install --reinstall .            # after changing this checkout
+```
+
+For development, `./bin/mem` runs the checkout directly without installing anything.
+
+The store itself is just a directory: `mkdir -p ~/.agents/memory`, copy `PROTOCOL.md` into it,
+and register the MCP server. `MEM_ROOT` points `mem` at a different root (used by the tests).
+
+## Consolidation
+
+Every `mem write`/`mem forget` and every `memory_write` consolidates the scope it touched before
+returning. The rules are deterministic — no model call:
+
+- two files of the same type with the same `name` are one note; the newer `modified` wins and
+  the older file is removed (its body is **not** merged);
+- two files of the same type whose descriptions overlap by at least 80% (word Jaccard) are
+  duplicates: the older's unique lines are appended to the newest body, then the older file is
+  removed;
+- `MEMORY.md` is rebuilt from the files, so a line for a deleted file cannot survive.
+
+A pass deletes a file only while its bytes still match what it read, and writes a merged keeper
+with the version it read, so a concurrent agent either wins cleanly or leaves both files for the
+next pass. The pass is idempotent: running it twice changes nothing. `mem dream` runs it by hand
+(`--all` for every project).
+
+Rename-and-contradict is **not** detected — the same fact restated under a different `name` stays
+as two notes. That is deliberate: guessing it from text without a model is how the wrong half of
+a pair gets deleted.
 
 ## Store layout
 
 ```
 $MEM_ROOT/
-├── config.toml
-├── PROTOCOL.md                              # copied from this repo
-├── global/{MEMORY.md,*.md}                  # user-wide facts and preferences
-├── projects/<sanitized-path>/{MEMORY.md,*.md}
-├── .state/state.json                        # session counter for `mem dream`
-├── .state/dream.lock                        # one consolidation at a time
-├── dream.log                                # one line per consolidation
-└── .git/                                    # optional; `mem dream` commits to it
+├── PROTOCOL.md                # the written contract, for wiring an agent by hand
+├── global/{MEMORY.md,*.md}    # user-wide preferences and facts
+└── projects/<sanitized-path>/{MEMORY.md,*.md}
 ```
 
 `<sanitized-path>` is the absolute cwd with every unsafe character replaced by `-`
-(`/home/u/proj` → `-home-u-proj`), matching what Claude Code and Qoder use.
+(`/home/u/proj` → `-home-u-proj`), matching what Claude Code and Qoder use. There is no config
+file, no runtime state, and no git repository: the store is the notes and the index.
 
-## Install
+## Layout
 
-There is no package to install: `bin/mem` runs straight from this checkout.
-
-1. Create the store and its repository:
-   `mkdir -p ~/.agents/memory && git -C ~/.agents/memory init`
-2. Copy the agent contract into it: `cp PROTOCOL.md ~/.agents/memory/PROTOCOL.md`
-3. Merge the relevant fragments from `install/` into each agent's configuration
-   (`claude-code.json`, `mcp.json`, `opencode.json`), and append `install/agents-md.md` to
-   `~/.agents/AGENTS.md` — Claude Code already imports that file.
-4. Set `"autoMemoryEnabled": false` in `~/.claude/settings.json` so the native store does not
-   run in parallel with this one.
-5. DSH: link `integrations/dsh` into `~/.dsh/plugins/memory`, register it with
-   `dsh plugin --profile <name> add link:$HOME/.dsh/plugins/memory`, and restart — the
-   details are in `integrations/dsh/README.md`. opencode has its own steps in
-   `integrations/opencode/README.md` (copy `mem.js` into its plugins directory, merge
-   `install/opencode.json`).
+```
+bin/mem              launcher for development (python3 -m memlib, no install needed)
+memlib/store.py      files, frontmatter, version tokens, conflicts, secret refusal
+memlib/index.py      MEMORY.md generation (atomic, no line budget)
+memlib/dream.py      consolidation, called after every change and by `mem dream`
+memlib/mcp.py        MCP stdio server: memory_index / memory_read / memory_write
+memlib/cli.py        argparse surface
+PROTOCOL.md          the agent-facing contract, copied into the store root
+docs/                research.md, design.md, roadmap.md
+tests/               unittest (stdlib only)
+```
 
 ## Tests
 
@@ -151,16 +155,18 @@ python3 -m unittest discover -s tests -v
 
 ## Notes
 
-- **No database.** The index is regenerated from the files by scanning the directory, which
-  is cheap at this scale and makes drift impossible.
+- **No database, no search index.** The index is regenerated from the files by scanning the
+  directory, which is cheap at this scale and makes drift impossible.
+- **The index has no line budget.** It is the whole retrieval path, so truncating it would hide
+  notes rather than save context.
 - **`if_version` is mandatory** on write unless `--force` is passed: a blind overwrite is
   exactly what the token exists to prevent.
-- **Dream is deterministic.** It has no model: a "contradiction" is the same `name` and type,
-  where the newer `modified` wins, and duplicates are notes of one type whose descriptions
-  overlap by at least 80%. Rename-and-contradict is not detected; that is a deliberate
-  trade-off, not an oversight.
-- **Runtime state is not memory.** `.state/` and `dream.log` are ignored by the store's
-  repository; only notes and `MEMORY.md` are committed.
-- **Nothing to install.** The standard library only, plus `git` as an optional companion for
-  dream's commits; without it the pass still consolidates.
+- **Schema is Claude Code's**: four types (`user`, `feedback`, `project`, `reference`), the same
+  frontmatter keys. No extra fields.
+- **Concurrency rests on the version token, held under a short-lived lock.** `write` and `delete`
+  take an `flock` on the scope directory for the read-check-replace, because a token check
+  without a lock is check-then-act: two writers holding the same token would both pass. The lock
+  is a kernel lock on an inode — no file, no state, and it dies with the process.
+- **`PROTOCOL.md` is not part of the agent's onboarding.** The MCP `instructions` field is. The
+  protocol file is only for connecting an agent that has no MCP client.
 - When testing, set `MEM_ROOT` to a scratch directory. The default root is the real store.

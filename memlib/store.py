@@ -8,9 +8,11 @@ same directory stays readable by hand, by `grep`, and by other agents.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import os
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +22,26 @@ DEFAULT_TYPE = "project"
 MAX_BODY_BYTES = 100 * 1024
 
 _FM_RE = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*\n?", re.S)
+
+
+@contextmanager
+def _locked(directory: Path):
+    """Serialize the read-check-write (and read-check-unlink) in one scope.
+
+    The lock is the directory's own inode, so it leaves no file and no state
+    behind and the kernel drops it when the process exits. Without it the
+    `if_version` check is a check-then-act: two writers can both read the same
+    version, both pass, and one silently overwrites the other.
+    """
+    handle = os.open(directory, os.O_RDONLY)
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        finally:
+            os.close(handle)
 
 
 class StoreError(Exception):
@@ -224,6 +246,21 @@ def list_memories(directory: Path) -> list[Memory]:
     return memories
 
 
+def _check_filename(filename: str) -> str:
+    if (
+        "/" in filename
+        or "\\" in filename
+        or filename in ("", ".", "..")
+        or not filename.endswith(".md")
+    ):
+        raise StoreError("filename must be a flat name ending in .md")
+    if filename == "MEMORY.md":
+        raise StoreError("MEMORY.md is generated; choose another name")
+    if any(ch in filename for ch in "\r\n\0"):
+        raise StoreError("filename must not contain control characters")
+    return filename
+
+
 def write(
     directory: Path,
     filename: str,
@@ -245,10 +282,9 @@ def write(
     """
     if memory_type not in TYPES:
         raise StoreError(f"unknown type {memory_type!r}; expected one of {', '.join(TYPES)}")
-    if "/" in filename or filename in ("", ".", "..") or not filename.endswith(".md"):
-        raise StoreError("filename must be a flat name ending in .md")
-    if filename == "MEMORY.md":
-        raise StoreError("MEMORY.md is generated; choose another name")
+    _check_filename(filename)
+    if if_version is None and not force:
+        raise StoreError("if_version is required (pass the version from read, or 'new')")
 
     encoded = body.encode("utf-8")
     if len(encoded) > MAX_BODY_BYTES:
@@ -262,73 +298,62 @@ def write(
 
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / filename
-    existing: Memory | None = None
-    if path.exists():
-        existing = load(path)
-        if if_version == "new":
-            raise ConflictError(
-                f"{filename} already exists; read it first and pass its version", existing
-            )
-        if if_version not in (None, existing.version) and not force:
-            raise ConflictError(
-                f"{filename} changed since it was read; re-read and merge", existing
-            )
-    elif if_version not in (None, "new") and not force:
-        raise StoreError(f"{filename} does not exist; pass if_version=new to create it")
-    if if_version is None and not force:
-        raise StoreError("if_version is required (pass the version from read, or 'new')")
+    # The lock spans read-check-replace: without it the guard is a
+    # check-then-act, and two writers holding the same token both pass.
+    with _locked(directory):
+        existing = load(path) if path.exists() else None
+        if existing is not None:
+            if if_version == "new":
+                raise ConflictError(
+                    f"{filename} already exists; read it first and pass its version", existing
+                )
+            if if_version not in (None, existing.version) and not force:
+                raise ConflictError(
+                    f"{filename} changed since it was read; re-read and merge", existing
+                )
+        elif if_version not in (None, "new") and not force:
+            raise StoreError(f"{filename} does not exist; pass if_version=new to create it")
 
-    metadata = dict((existing.meta.get("metadata") if existing else {}) or {})
-    metadata.update(
-        {
-            "node_type": "memory",
-            "type": memory_type,
-            "originSessionId": session_id or metadata.get("originSessionId", ""),
-            "modified": now_iso(),
-        }
-    )
-    meta = {"name": name or path.stem, "description": description, "metadata": metadata}
-    text = render(meta, body + "\n")
+        metadata = dict((existing.meta.get("metadata") if existing else {}) or {})
+        metadata.update(
+            {
+                "node_type": "memory",
+                "type": memory_type,
+                "originSessionId": session_id or metadata.get("originSessionId", ""),
+                "modified": now_iso(),
+            }
+        )
+        meta = {"name": name or path.stem, "description": description, "metadata": metadata}
+        text = render(meta, body + "\n")
 
-    tmp = directory / f".{filename}.tmp"
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+        # Unique per process: two agents writing the same note must not interleave
+        # inside one temp file before either replaces it.
+        tmp = directory / f".{filename}.{os.getpid()}.tmp"
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
     return load(path)
 
 
-def delete(directory: Path, filename: str) -> bool:
-    if "/" in filename or filename == "MEMORY.md":
-        raise StoreError("refusing to delete that path")
-    path = directory / filename
-    if not path.exists():
+def delete(directory: Path, filename: str, if_version: str | None = None) -> bool:
+    """Remove one memory; with `if_version`, only while the bytes still match.
+
+    The check and the unlink happen under the scope lock. A separate
+    load-then-delete could not promise that: a write landing between the two
+    steps would be deleted by a guard that had already passed.
+    """
+    _check_filename(filename)
+    if not directory.is_dir():
         return False
-    path.unlink()
-    return True
+    path = directory / filename
+    with _locked(directory):
+        if not path.exists():
+            return False
+        if if_version is not None and version_of(path.read_bytes()) != if_version:
+            return False
+        path.unlink()
+        return True
 
 
 def tokens(text: str) -> set[str]:
-    """Words used for lexical matching; shared by recall and dream."""
+    """Words used to compare descriptions; shared with dream's duplicate rule."""
     return {t for t in re.split(r"[^a-z0-9\u0600-\u06FF]+", text.lower()) if len(t) > 2}
-
-
-def recall(memories: list[Memory], query: str, top_k: int = 8) -> list[tuple[float, Memory]]:
-    """Lexical relevance over name+description.
-
-    Deterministic and free; the index is small enough that a model call would
-    be wasted work. Returns (score, memory) sorted by score, zero-score dropped.
-    """
-    wanted = tokens(query)
-    if not wanted:
-        return []
-    scored = []
-    for memory in memories:
-        haystack = tokens(f"{memory.name} {memory.description} {memory.type}")
-        if not haystack:
-            continue
-        overlap = len(wanted & haystack)
-        if not overlap:
-            continue
-        score = overlap / (len(wanted) ** 0.5) / (len(haystack) ** 0.25)
-        scored.append((round(score, 3), memory))
-    scored.sort(key=lambda pair: (-pair[0], pair[1].filename))
-    return scored[:top_k]

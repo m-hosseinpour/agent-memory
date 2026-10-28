@@ -2,18 +2,20 @@
 
 The index is regenerated from the files themselves rather than edited in
 place. Regeneration is a directory scan of a few dozen files, so it is cheap
-enough to run on every write, and it makes drift impossible: a renamed file
+enough to run on every change, and it makes drift impossible: a renamed file
 can never leave a dangling line behind.
+
+There is no line budget. The index is the whole of retrieval: an agent reads it
+and then loads the one note that applies, so a truncated index would hide notes
+rather than save context.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .store import TYPES, Memory, list_memories
-
-MAX_INDEX_LINES = 200
-MAX_INDEX_BYTES = 25 * 1024
 
 
 def line_for(memory: Memory, prefix: str = "") -> str:
@@ -41,17 +43,12 @@ def rebuild(directory: Path, prefix: str = "") -> str:
     directory.mkdir(parents=True, exist_ok=True)
     text = render(list_memories(directory), prefix)
     header = "# Memory\n\n" if text else "# Memory\n\n_empty_\n"
-    (directory / "MEMORY.md").write_text(header + (text + "\n" if text else ""), encoding="utf-8")
+    target = directory / "MEMORY.md"
+    # Atomic: another process may be reading the index while this one repairs
+    # it, and a half-written table of contents is worse than a stale one.
+    # Unique per process: two concurrent repairs must not interleave inside one
+    # temp file before either replaces the index.
+    tmp = directory / f".MEMORY.md.{os.getpid()}.tmp"
+    tmp.write_text(header + (text + "\n" if text else ""), encoding="utf-8")
+    os.replace(tmp, target)
     return text
-
-
-def cap(text: str, max_lines: int = MAX_INDEX_LINES, max_bytes: int = MAX_INDEX_BYTES) -> str:
-    """Trim an index block to the budget, keeping whole lines."""
-    lines = text.splitlines()
-    if len(lines) > max_lines:
-        lines = lines[:max_lines] + ["… (index truncated)"]
-    out = "\n".join(lines)
-    if len(out.encode("utf-8")) > max_bytes:
-        out = out.encode("utf-8")[:max_bytes].decode("utf-8", "ignore")
-        out = out.rsplit("\n", 1)[0] + "\n… (index truncated)"
-    return out

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-memory"
+dynamic = ["version"]
+description = "A markdown memory store shared by several coding agents"
+readme = "README.md"
+requires-python = ">=3.11"
+
+[project.scripts]
+mem = "memlib.cli:main"
+
+[tool.hatch.version]
+path = "memlib/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["memlib"]

@@ -1,8 +1,8 @@
-"""Tests for the CLI contract every adapter depends on.
+"""Tests for the CLI contract.
 
-Adapters (hooks, MCP, editor plugins) do not import `memlib`; they parse the
-JSON these commands print and branch on the exit code. So the shapes asserted
-here are a compatibility surface: changing one silently breaks an adapter.
+The CLI is the scripting surface: every command prints one JSON object (or text
+for `index`), and the exit code says what happened. The MCP server shares the
+same store/index/dream code, so a change here is a change there too.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from memlib import cli, config, store
 
@@ -74,9 +75,6 @@ class CliTestCase(unittest.TestCase):
 
     def project_dir(self):
         return config.scope_dir("project", str(self.cwd))
-
-    def write_config(self, text):
-        (self.root / "config.toml").write_text(text, encoding="utf-8")
 
 
 class WriteContractTests(CliTestCase):
@@ -139,13 +137,22 @@ class WriteContractTests(CliTestCase):
         self.assertEqual((data["ok"], data["error"]), (False, "secret"))
         self.assertFalse((self.project_dir() / "leak.md").exists())
 
-    def test_unknown_type_is_a_usage_error(self):
+    def test_usage_error_is_exit_1_with_a_json_error(self):
         # argparse owns the choice list, so this never reaches the store check.
-        with self.assertRaises(SystemExit) as ctx:
-            self.run_cli(
-                *self.write_args("odd.md", content="body", if_version="new", type="gotcha")
+        # Exit 2 is reserved for a version conflict; a typo must not look like
+        # one (and must not print an empty stdout).
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout), self.assertRaises(SystemExit) as ctx:
+            cli.main(
+                [
+                    "write", "--scope", "project", "--cwd", str(self.cwd),
+                    "--path", "odd.md", "--content", "body",
+                    "--if-version", "new", "--type", "gotcha",
+                ]
             )
-        self.assertEqual(ctx.exception.code, 2)
+        self.assertEqual(ctx.exception.code, 1)
+        data = json.loads(stdout.getvalue())
+        self.assertEqual((data["ok"], data["error"]), (False, "invalid"))
 
     def test_bad_filename_is_exit_1(self):
         code, data = self.json_cli(
@@ -202,8 +209,8 @@ class ReadListForgetContractTests(CliTestCase):
         self.assertFalse(data["removed"])
 
 
-class IndexAndRecallTests(CliTestCase):
-    def test_index_prints_prompt_text_not_json(self):
+class IndexTests(CliTestCase):
+    def test_index_prints_text_not_json(self):
         self.create("pnpm.md", description="the lockfile is pnpm")
         self.create("pref.md", description="short answers", scope="global")
         code, text = self.run_cli("index", "--cwd", str(self.cwd))
@@ -218,20 +225,21 @@ class IndexAndRecallTests(CliTestCase):
         code, text = self.run_cli("index", "--cwd", str(self.cwd))
         self.assertEqual((code, text), (0, ""))
 
-    def test_recall_is_silent_below_the_threshold(self):
-        self.create("pnpm.md", description="the lockfile is pnpm")
-        code, text = self.run_cli("recall", "lockfile", "--cwd", str(self.cwd))
-        self.assertEqual((code, text), (0, ""))
-
-    def test_recall_prints_reference_lines_above_the_threshold(self):
-        self.write_config("[recall]\nselect_threshold = 1\ntop_k = 3\n")
-        self.create("pnpm.md", description="the lockfile is pnpm")
-        self.create("kde.md", description="chromium poisons the fontconfig cache")
-        code, text = self.run_cli("recall", "pnpm lockfile", "--cwd", str(self.cwd))
-        self.assertEqual(code, 0)
-        self.assertEqual(len(text.strip().splitlines()), 1)
-        self.assertIn("[Pnpm](", text)
-        self.assertIn(str(self.project_dir() / "pnpm.md"), text)
+    def test_index_lists_every_note(self):
+        # The index is the only retrieval path, so it is never truncated.
+        # Distinct words: descriptions that share every token would be merged
+        # by the consolidation that runs after each write.
+        words = (
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo "
+            "lima mike november oscar papa quebec romeo sierra tango uniform "
+            "victor whiskey xray yankee zulu"
+        ).split()
+        for word in words:
+            self.create(f"note-{word}.md", description=f"{word} preference")
+        _, text = self.run_cli("index", "--cwd", str(self.cwd))
+        for word in words:
+            self.assertIn(f"note-{word}.md", text)
+        self.assertNotIn("truncated", text)
 
 
 class RootOverrideTests(CliTestCase):
@@ -258,17 +266,95 @@ class RootOverrideTests(CliTestCase):
         self.assertTrue(Path(path).is_file())
 
 
-class AdapterEntryPointTests(CliTestCase):
-    def test_dream_below_the_threshold_is_a_no_op_json(self):
+class ConsolidationOnChangeTests(CliTestCase):
+    """A change is consolidated before the command returns."""
+
+    def test_same_name_notes_are_reduced_to_the_newest(self):
+        self.create("a.md", "first body", name="shared")
+        self.create("b.md", "second body", name="shared")
+        self.assertFalse((self.project_dir() / "a.md").exists())
+        self.assertTrue((self.project_dir() / "b.md").exists())
+        self.assertNotIn("a.md", (self.project_dir() / "MEMORY.md").read_text())
+
+    def test_duplicate_descriptions_are_merged(self):
+        description = "the lockfile is pnpm and npm install breaks CI"
+        self.create("a.md", "first detail", description=description)
+        self.create("b.md", "second detail", description=description)
+        self.assertFalse((self.project_dir() / "a.md").exists())
+        body = store.load(self.project_dir() / "b.md").body
+        self.assertIn("second detail", body)
+        self.assertIn("first detail", body)
+
+    def test_forget_consolidates(self):
+        self.create("a.md", name="shared")
+        self.create("b.md", name="shared")
+        code, data = self.json_cli(
+            "forget", "--scope", "project", "--cwd", str(self.cwd), "--path", "b.md"
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(store.list_memories(self.project_dir()), [])
+
+    def test_dream_is_a_manual_full_pass(self):
+        self.create("a.md", name="shared")
+        self.create("b.md", name="shared")
         code, data = self.json_cli("dream", "--cwd", str(self.cwd))
         self.assertEqual(code, 0)
-        self.assertFalse(data["ran"])
-        self.assertEqual(data["reason"], "below threshold")
-
-    def test_dream_with_force_runs(self):
-        code, data = self.json_cli("dream", "--cwd", str(self.cwd), "--force")
-        self.assertEqual(code, 0)
         self.assertTrue(data["ran"])
+        self.assertEqual(data["scopes"], 2)
+        self.assertEqual(set(data), {"ok", "ran", "scopes", "merged", "replaced", "index_lines"})
+
+    def test_dream_repairs_an_index_line_left_behind(self):
+        self.create("a.md")
+        (self.project_dir() / "a.md").unlink()
+        code, data = self.json_cli("dream", "--cwd", str(self.cwd))
+        self.assertEqual(code, 0)
+        self.assertEqual(data["index_lines"], 1)
+        self.assertNotIn("a.md", (self.project_dir() / "MEMORY.md").read_text())
+
+    def test_the_version_returned_is_the_one_on_disk(self):
+        description = "the lockfile is pnpm and npm install breaks CI"
+        self.create("a.md", "first detail", description=description)
+        written = self.create("b.md", "second detail", description=description)
+        on_disk = store.load(self.project_dir() / "b.md")
+        # The pass merged a.md's body into b.md, so the version from before the
+        # pass would no longer be accepted by the next write.
+        self.assertEqual(written["version"], on_disk.version)
+        self.assertIn("first detail", on_disk.body)
+
+    def test_a_tied_timestamp_keeps_the_note_just_written(self):
+        # Same name and the same millisecond: the tiebreak sorts by file name,
+        # and "a.md" < "z.md" would delete the file that was just written.
+        with mock.patch("memlib.store.now_iso", return_value="2026-10-02T00:00:00.000Z"):
+            self.create("z.md", "old body", name="shared")
+            written = self.create("a.md", "new body", name="shared")
+        self.assertTrue((self.project_dir() / "a.md").exists())
+        self.assertFalse((self.project_dir() / "z.md").exists())
+        self.assertEqual(written["version"], store.load(self.project_dir() / "a.md").version)
+
+
+class CliErrorShapeTests(CliTestCase):
+    """Ordinary failures are one JSON object with an exit code, not a traceback."""
+
+    def test_a_missing_content_file_is_an_io_error(self):
+        code, data = self.json_cli(
+            *self.write_args("x.md", content_file="/nonexistent/body.txt", if_version="new")
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual((data["ok"], data["error"]), (False, "io"))
+
+    def test_a_dotdot_path_is_refused_as_invalid(self):
+        code, data = self.json_cli(
+            "forget", "--scope", "project", "--cwd", str(self.cwd), "--path", ".."
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(data["error"], "invalid")
+
+    def test_a_missing_memory_on_read_is_invalid(self):
+        code, data = self.json_cli(
+            "read", "--scope", "project", "--cwd", str(self.cwd), "--path", "nope.md"
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(data["error"], "invalid")
 
 
 if __name__ == "__main__":

@@ -1,53 +1,44 @@
-"""Consolidation pass over the store ("dream").
+"""Consolidation of the store, run after every change.
 
-`mem dream` is the equivalent of Claude Code's autoDream: a periodic pass that
-merges duplicates, drops a note that a newer version of the same note replaced,
-and repairs the index. It is deterministic — no model call — because at this
-size the cheap rules catch nearly all drift, and a pass that costs tokens would
-never be allowed to run unattended.
+`mem write` and `mem forget` call `after_change` on the scope they touched, and
+the same pass is reachable by hand as `mem dream` (with `--all` to walk every
+project). There is no schedule, no session counter and no background process:
+a change is consolidated while the caller waits, so the store is never left in
+a state that needs a later janitor.
 
-Trigger: the session counter in `.state/state.json`, which the SessionStart hook
-increments. The pass runs when the counter reaches `dream.every_sessions`, or
-whenever `--force` is given. Without `--all` it touches the global scope and the
-current project's scope; `--all` walks every project directory.
+What a pass does:
 
-Concurrency: a `flock` on `.state/dream.lock`, released by the kernel when the
-process ends. A second pass exits without doing anything instead of queueing,
-and a crash cannot leave the lock held.
+* two files of the same type with the same `name` are one note — the newer
+  `modified` wins and the older file is removed (its body is *not* merged);
+* two files of the same type whose descriptions overlap by at least 80% are
+  duplicates — the older's unique lines are appended to the newest and the
+  older file is removed;
+* `MEMORY.md` is rebuilt from the files, so a line for a deleted file cannot
+  survive.
 
-History: when the store is a git repository (and its root is the repository
-top-level, not a directory inside another repo), the pass commits the tree
-before it touches anything and again afterwards, so each consolidation is one
-reviewable diff. `.state/` and `dream.log` are runtime bookkeeping, not
-memories; they are ignored by the repository, which is also what lets a second
-run leave no diff at all.
+The pass is deterministic: no model call. At this size the cheap rules catch
+nearly all drift, and a pass that costs tokens could not run on every write.
+"Contradiction" therefore means identity, not semantics: a note whose *stance*
+changed under a different name is not detected — guessing that from text
+without a model is exactly the kind of heuristic that quietly deletes the wrong
+half of a pair.
 
-"Contradiction" here means identity, not semantics: two files of the same type
-and the same `name` are the same note, and the newer `modified` wins. A note
-whose *stance* changed under a different name is not detected — guessing that
-from text without a model is exactly the kind of heuristic that quietly deletes
-the wrong half of a pair.
+Concurrency: the pass itself takes no lock. It deletes a file only while its
+bytes still match what the pass read, and writes a merged keeper with the
+version it read, so a concurrent writer either wins cleanly or leaves both
+files for the next pass. `store.write` and `store.delete` do hold a short
+`flock` on the scope directory; this pass runs after that lock is released and
+relies on the version re-checks. Rebuilding the index is atomic.
 """
 
 from __future__ import annotations
 
-import fcntl
 import json
-import os
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, hooks, index, store
-
-LOCK_NAME = "dream.lock"
-LOG_NAME = "dream.log"
-GIT_TIMEOUT = 15
-
-# Patterns for the store's own repository. Temp files are written next to the
-# memory they replace (`.foo.md.tmp`) and only survive a crash.
-GITIGNORE_LINES = (".state/", LOG_NAME, ".*.tmp")
+from . import config, index, store
 
 # Two descriptions this close describe the same thing. Jaccard over words of
 # three or more characters, so "pnpm, not npm" and "use pnpm not npm" match.
@@ -60,8 +51,6 @@ class Stats:
     merged: int = 0
     replaced: int = 0
     index_lines: int = 0
-    commits: int = 0
-    sessions: int = 0
 
     def as_dict(self) -> dict:
         return {
@@ -69,93 +58,55 @@ class Stats:
             "merged": self.merged,
             "replaced": self.replaced,
             "index_lines": self.index_lines,
-            "commits": self.commits,
-            "sessions": self.sessions,
         }
 
 
-def run(force: bool = False, cwd: str = ".", all_scopes: bool = False) -> int:
-    settings = config.load()
-    every = config.every_sessions(settings)
-    sessions = hooks.session_count()
-    if not force and sessions < every:
-        return _emit_noop("below threshold", sessions, every)
+def after_change(directory: Path, keep: str | None = None) -> Stats:
+    """Consolidate one scope after a memory was written or deleted.
 
-    root = config.root()
+    `keep` is the file the caller just wrote. The rules would otherwise be free
+    to delete it — a same-name note whose `modified` ties to the millisecond,
+    sorted by file name, can land before the new one — and the caller would
+    report success for a note that is already gone.
+
+    Best effort by design: the caller's change already landed, so a failure
+    here is reported on stderr and left for the next pass instead of turning a
+    successful write into an error.
+    """
+    stats = Stats(scopes=1)
     try:
-        lock = _acquire(root)
+        # The index must reflect the change even if the rules below fail.
+        index.rebuild(directory)
     except OSError as exc:
-        _emit({"ok": False, "error": "io", "message": str(exc)})
-        return 1
-    if lock is None:
-        _emit({"ok": True, "ran": False, "reason": "locked"})
-        return 0
-
-    stats = Stats()
-    errors: list[str] = []
+        _warn(f"index not rebuilt: {exc}")
     try:
-        # A pass that was waiting for the lock may have consolidated already.
-        if not force:
-            sessions = hooks.session_count()
-            if sessions < every:
-                return _emit_noop("below threshold", sessions, every)
+        _consolidate(directory, stats, keep)
+    except Exception as exc:  # a janitor must never break the caller's write
+        _warn(f"consolidation skipped: {type(exc).__name__}: {exc}")
+    return stats
 
+
+def run(cwd: str = ".", all_scopes: bool = False) -> int:
+    """Manual pass: consolidate the global scope and this project (or all)."""
+    stats = Stats()
+    try:
         directories = _scopes(cwd, all_scopes)
         stats.scopes = len(directories)
-        # Ignore rules first: the lockfile is already on disk, and the snapshot
-        # below must not pick up runtime bookkeeping.
-        _ensure_gitignore(root)
-        # Snapshot first, then let the pass write: the diff between the two
-        # commits is exactly what consolidation changed.
-        if _git_commit(root, "dream: snapshot before consolidation"):
-            stats.commits += 1
+        errors: list[str] = []
         for directory in directories:
             try:
                 _consolidate(directory, stats)
             except OSError as exc:
-                errors.append("{}: {}".format(directory.name, exc))
-        if _git_commit(root, _commit_message(stats)):
-            stats.commits += 1
-        if sessions:
-            hooks.reset_sessions()
-            stats.sessions = sessions
-        _append_log(root, stats)
+                errors.append(f"{directory.name}: {exc}")
     except Exception as exc:  # never a traceback instead of the JSON contract
-        _emit(
-            {
-                "ok": False,
-                "error": "internal",
-                "message": "{}: {}".format(exc.__class__.__name__, exc),
-            }
-        )
+        _emit({"ok": False, "error": "internal", "message": f"{type(exc).__name__}: {exc}"})
         return 1
-    finally:
-        _release(lock)
 
-    payload = {"ok": True, "ran": True, **stats.as_dict()}
+    payload = {"ok": not errors, "ran": True, **stats.as_dict()}
     if errors:
-        payload.update({"ok": False, "error": "partial", "message": "; ".join(errors)})
-        _emit(payload)
-        return 1
+        payload.update({"error": "partial", "message": "; ".join(errors)})
     _emit(payload)
-    return 0
-
-
-def _emit_noop(reason: str, sessions: int, every: int) -> int:
-    _emit(
-        {
-            "ok": True,
-            "ran": False,
-            "reason": reason,
-            "sessions": sessions,
-            "every": every,
-        }
-    )
-    return 0
-
-
-# --------------------------------------------------------------------------
-# one scope
+    return 1 if errors else 0
 
 
 def _scopes(cwd: str, all_scopes: bool) -> list[Path]:
@@ -176,18 +127,20 @@ def _scopes(cwd: str, all_scopes: bool) -> list[Path]:
     return unique
 
 
-def _consolidate(directory: Path, stats: Stats) -> None:
+def _consolidate(directory: Path, stats: Stats, keep: str | None = None) -> None:
     if not directory.is_dir():
         return
     memories = store.list_memories(directory)
-    replaced = _replace_same_name(directory, memories, stats)
+    replaced = _replace_same_name(directory, memories, stats, keep)
     if replaced:
         memories = [m for m in memories if m.filename not in replaced]
-    _merge_duplicates(directory, memories, stats)
+    _merge_duplicates(directory, memories, stats, keep)
     stats.index_lines += _repair_index(directory)
 
 
-def _replace_same_name(directory: Path, memories: list[store.Memory], stats: Stats) -> set[str]:
+def _replace_same_name(
+    directory: Path, memories: list[store.Memory], stats: Stats, keep: str | None = None
+) -> set[str]:
     """Same type + same name = the same note; the newest `modified` wins."""
     groups: dict[tuple[str, str], list[store.Memory]] = {}
     for memory in memories:
@@ -198,6 +151,8 @@ def _replace_same_name(directory: Path, memories: list[store.Memory], stats: Sta
             continue
         group.sort(key=lambda m: (m.modified, m.filename))
         for older in group[:-1]:
+            if older.filename == keep:
+                continue
             if _delete_unchanged(directory, older):
                 removed.add(older.filename)
                 stats.replaced += 1
@@ -207,30 +162,34 @@ def _replace_same_name(directory: Path, memories: list[store.Memory], stats: Sta
 def _delete_unchanged(directory: Path, memory: store.Memory) -> bool:
     """Unlink only while the file still holds the bytes this pass looked at.
 
-    Dream runs detached beside agents that keep writing; deleting from the
-    list it loaded minutes ago would throw away a newer note.
+    The check and the unlink happen under the store's scope lock; doing them in
+    two steps would let a write land in between and be deleted.
     """
     try:
-        current = store.load(directory / memory.filename)
-    except (OSError, store.StoreError):
-        return False
-    if current.version != memory.version:
-        return False
-    try:
-        return store.delete(directory, memory.filename)
+        return store.delete(directory, memory.filename, if_version=memory.version)
     except store.StoreError:
         return False
 
 
-def _merge_duplicates(directory: Path, memories: list[store.Memory], stats: Stats) -> None:
+def _merge_duplicates(
+    directory: Path, memories: list[store.Memory], stats: Stats, keep: str | None = None
+) -> None:
     """Fold notes with a near-identical description into the newest one.
 
     Bodies are merged line-wise: only lines the keeper does not already have are
     appended, so a near-duplicate's extra detail survives. The keeper is written
     before any duplicate is deleted, and the write carries the version this pass
     read; on a conflict both files stay for the next run.
+
+    `keep` sorts first, so the note just written is the keeper even when its
+    `modified` ties with an older duplicate — otherwise the tiebreak could make
+    the new file the duplicate that gets deleted.
     """
-    ordered = sorted(memories, key=lambda m: (m.modified, m.filename), reverse=True)
+    ordered = sorted(
+        memories,
+        key=lambda m: (m.filename == keep, m.modified, m.filename),
+        reverse=True,
+    )
     clusters: list[tuple[store.Memory, list[store.Memory]]] = []
     bodies: dict[str, str] = {}
     for memory in ordered:
@@ -270,6 +229,8 @@ def _merge_duplicates(directory: Path, memories: list[store.Memory], stats: Stat
             except store.StoreError:
                 continue
         for duplicate in duplicates:
+            if duplicate.filename == keep:
+                continue
             if _delete_unchanged(directory, duplicate):
                 stats.merged += 1
 
@@ -307,148 +268,12 @@ def _merge_body(keeper: str, other: str) -> str:
     return keeper.rstrip() + "\n\n" + "\n".join(extra)
 
 
-# --------------------------------------------------------------------------
-# lock
-
-
-def _acquire(root: Path) -> tuple[Path, int] | None:
-    """Take an exclusive flock on the lockfile, or return None.
-
-    The lock is the kernel's, not a pid written into a file: it disappears when
-    the process dies for any reason, so a crash cannot wedge every later pass
-    and the file cannot be stolen between creation and its first write.
-    """
-    path = root / ".state" / LOCK_NAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+def _warn(message: str) -> None:
     try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        os.close(handle)
-        return None
-    try:
-        os.ftruncate(handle, 0)
-        os.write(handle, "{}\n".format(os.getpid()).encode("ascii"))
-    except OSError:
-        pass  # the pid is diagnostic only; the flock is the lock
-    return path, handle
-
-
-def _release(lock: tuple[Path, int] | None) -> None:
-    if lock is None:
-        return
-    try:
-        os.close(lock[1])  # closing the descriptor releases the flock
-    except OSError:
-        pass
-
-
-# --------------------------------------------------------------------------
-# git
-
-
-def _git(root: Path, args: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(root), *args],
-        capture_output=True,
-        text=True,
-        timeout=GIT_TIMEOUT,
-    )
-
-
-def _is_repo(root: Path) -> bool:
-    if not (root / ".git").exists():
-        return False
-    try:
-        finished = _git(root, ["rev-parse", "--show-toplevel"])
-    except (OSError, subprocess.SubprocessError):
-        return False
-    if finished.returncode != 0:
-        return False
-    try:
-        return Path(finished.stdout.strip()).resolve() == root.resolve()
-    except OSError:
-        return False
-
-
-def _ensure_gitignore(root: Path) -> None:
-    """Keep runtime bookkeeping out of the repository.
-
-    A store committed by hand before this rule existed may already track these
-    paths; untracking them once is what makes later runs leave no diff.
-    """
-    if not _is_repo(root):
-        return
-    path = root / ".gitignore"
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        lines = []
-    missing = [line for line in GITIGNORE_LINES if line not in lines]
-    if missing:
-        try:
-            path.write_text("\n".join(lines + missing) + "\n", encoding="utf-8")
-        except OSError:
-            return
-    try:
-        tracked = _git(root, ["ls-files", "--", ".state", LOG_NAME])
-    except (OSError, subprocess.SubprocessError):
-        return
-    if tracked.returncode == 0 and tracked.stdout.strip():
-        try:
-            _git(root, ["rm", "-r", "--cached", "-q", "--ignore-unmatch", "--", ".state", LOG_NAME])
-        except (OSError, subprocess.SubprocessError):
-            pass
-
-
-def _git_commit(root: Path, message: str) -> bool:
-    """Commit the whole tree when it differs from HEAD; return whether it did."""
-    if not _is_repo(root):
-        return False
-    try:
-        if _git(root, ["add", "-A"]).returncode != 0:
-            return False
-        if _git(root, ["diff", "--cached", "--quiet"]).returncode == 0:
-            return False
-        finished = _git(
-            root,
-            ["-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", message],
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    if finished.returncode != 0:
-        # Not silent: a missing git identity is the usual cause, and the pass
-        # would otherwise keep reporting success while its history stopped
-        # growing and left the tree staged.
-        detail = (finished.stderr or finished.stdout or "").strip().splitlines()
-        sys.stderr.write(
-            "mem dream: git commit failed: {}\n".format(
-                detail[-1] if detail else "no output"
-            )
-        )
-        return False
-    return True
-
-
-def _commit_message(stats: Stats) -> str:
-    return "dream: merged {0}, replaced {1}, index lines removed {2}".format(
-        stats.merged, stats.replaced, stats.index_lines
-    )
-
-
-# --------------------------------------------------------------------------
-# output
-
-
-def _append_log(root: Path, stats: Stats) -> None:
-    line = (
-        "{time} dream scopes={scopes} merged={merged} replaced={replaced} "
-        "index={index_lines} sessions={sessions} commits={commits}\n"
-    ).format(time=store.now_iso(), **stats.as_dict())
-    try:
-        with open(root / LOG_NAME, "a", encoding="utf-8") as handle:
-            handle.write(line)
-    except OSError:
+        # No "dream" in the prefix: the same pass now runs after a write, where
+        # naming a scheduler would only confuse whoever reads the log.
+        sys.stderr.write(f"mem: {message}\n")
+    except Exception:
         pass
 
 

@@ -105,39 +105,14 @@ class WriteTests(unittest.TestCase):
         self.assertTrue(store.delete(self.dir, "a.md"))
         self.assertFalse(store.delete(self.dir, "a.md"))
 
-
-class RecallTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.dir = Path(self.tmp.name)
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def test_scores_overlap_and_skips_unrelated(self):
-        store.write(
-            self.dir,
-            "pnpm.md",
-            "body",
-            name="pnpm-not-npm",
-            description="the lockfile is pnpm",
-            if_version="new",
-        )
-        store.write(
-            self.dir,
-            "kde.md",
-            "body",
-            name="kde-fontconfig",
-            description="chromium poisons the fontconfig cache",
-            if_version="new",
-        )
-        hits = store.recall(store.list_memories(self.dir), "pnpm lockfile", top_k=5)
-        self.assertEqual(len(hits), 1)
-        self.assertEqual(hits[0][1].name, "pnpm-not-npm")
-
-    def test_empty_query_returns_nothing(self):
-        store.write(self.dir, "a.md", "body", description="x", if_version="new")
-        self.assertEqual(store.recall(store.list_memories(self.dir), "   "), [])
+    def test_delete_with_a_stale_version_keeps_the_file(self):
+        # `if_version` on delete is what lets consolidation remove a file only
+        # while it still holds the bytes the pass read.
+        written = store.write(self.dir, "a.md", "one", if_version="new")
+        self.assertFalse(store.delete(self.dir, "a.md", if_version="deadbeef"))
+        self.assertTrue((self.dir / "a.md").exists())
+        self.assertTrue(store.delete(self.dir, "a.md", if_version=written.version))
+        self.assertFalse((self.dir / "a.md").exists())
 
 
 class IndexTests(unittest.TestCase):
@@ -176,12 +151,6 @@ class IndexTests(unittest.TestCase):
     def test_empty_store(self):
         index.rebuild(self.dir)
         self.assertIn("_empty_", (self.dir / "MEMORY.md").read_text())
-
-    def test_cap_keeps_whole_lines(self):
-        text = "\n".join(f"- line {i}" for i in range(50))
-        capped = index.cap(text, max_lines=10)
-        self.assertEqual(len(capped.splitlines()), 11)
-        self.assertTrue(capped.endswith("(index truncated)"))
 
 
 if __name__ == "__main__":

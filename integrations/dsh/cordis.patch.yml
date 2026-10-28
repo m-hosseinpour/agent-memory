@@ -1,5 +1,0 @@
-# DSH bundle patch: adds the memory plugin row to every profile that selects
-# this bundle. Config is optional; see README.md for the defaults.
-- insert:
-    - id: memory
-      name: 'dsh-memory'

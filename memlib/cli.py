@@ -1,11 +1,13 @@
 """Command line interface.
 
-Every integration (hooks, MCP, editor plugins) is a thin caller of these
-commands, so the behaviour lives in one place and can be tested without any
-agent present.
+Everything an agent does goes through the MCP server, which is this module's
+`store`/`index`/`dream` logic in-process. This CLI exists for two callers:
 
-Output convention: mutating and query commands print JSON; `index` and
-`recall` print text meant to be injected into a prompt.
+* a human (or a hookless agent) running the same operations by hand;
+* `PROTOCOL.md`, the written contract for an agent that has no MCP client.
+
+Output convention: mutating and query commands print JSON; `index` prints text
+meant to be read, not parsed.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import config, index, store
+from . import config, dream, index, store
 
 
 def _read_content(args) -> str:
@@ -26,14 +28,6 @@ def _read_content(args) -> str:
     if sys.stdin.isatty():
         raise store.StoreError("no content: pass --content or pipe the body on stdin")
     return sys.stdin.read()
-
-
-def _rel_prefix(directory: Path) -> str:
-    """Path prefix that makes links resolvable inside a combined block."""
-    try:
-        return str(directory.relative_to(config.root())).rstrip("/") + "/"
-    except ValueError:
-        return ""
 
 
 def _emit(payload: dict) -> int:
@@ -55,13 +49,19 @@ def cmd_write(args) -> int:
         session_id=args.session,
         force=args.force,
     )
-    index.rebuild(directory)
+    # The change is consolidated before the command returns: no queued state
+    # to be picked up by a later pass. `keep` stops the pass from deleting the
+    # note that was just written when timestamps tie.
+    dream.after_change(directory, keep=memory.filename)
+    # The pass may have merged another note's body into this one, so report the
+    # version that is actually on disk, not the one from before the pass.
+    current = store.load(memory.path)
     return _emit(
         {
             "ok": True,
-            "path": str(memory.path),
-            "version": memory.version,
-            "modified": memory.modified,
+            "path": str(current.path),
+            "version": current.version,
+            "modified": current.modified,
         }
     )
 
@@ -112,62 +112,21 @@ def cmd_forget(args) -> int:
     directory = config.scope_dir(args.scope, args.cwd)
     removed = store.delete(directory, args.path)
     if removed:
-        index.rebuild(directory)
+        dream.after_change(directory)
     return _emit({"ok": True, "removed": removed, "path": args.path})
 
 
 def cmd_index(args) -> int:
-    settings = config.load()
-    max_lines = int(config.get("context", "index_max_lines", settings) or index.MAX_INDEX_LINES)
     scopes = ["global", "project"] if args.scope == "all" else [args.scope]
     blocks = []
     for scope in scopes:
         directory = config.scope_dir(scope, args.cwd)
-        if args.rebuild:
-            index.rebuild(directory)
-        text = index.render(store.list_memories(directory), prefix=_rel_prefix(directory))
-        if not text:
-            continue
-        blocks.append(f"# {scope} memory\n{text}")
-    if not blocks:
-        return 0
-    sys.stdout.write(index.cap("\n\n".join(blocks), max_lines=max_lines) + "\n")
+        text = index.render(store.list_memories(directory))
+        if text:
+            blocks.append(f"# {scope} memory\n{text}")
+    if blocks:
+        sys.stdout.write("\n\n".join(blocks) + "\n")
     return 0
-
-
-def cmd_recall(args) -> int:
-    settings = config.load()
-    threshold = int(config.get("recall", "select_threshold", settings) or 40)
-    top_k = args.top_k or int(config.get("recall", "top_k", settings) or 8)
-
-    candidates: list[tuple[str, store.Memory]] = []
-    for scope in ("project", "global"):
-        directory = config.scope_dir(scope, args.cwd)
-        for memory in store.list_memories(directory):
-            candidates.append((scope, memory))
-
-    # A small store is already fully present in the injected index; scoring it
-    # again would only add noise. This mirrors how the reference agents behave
-    # at small sizes.
-    if len(candidates) < threshold:
-        return 0
-
-    hits = store.recall([m for _, m in candidates], args.query, top_k=top_k)
-    lines = [
-        f"- [{m.title}]({m.path}) — {m.description}"
-        if m.description
-        else f"- [{m.title}]({m.path})"
-        for _, m in hits
-    ]
-    if lines:
-        sys.stdout.write("\n".join(lines) + "\n")
-    return 0
-
-
-def cmd_hook(args) -> int:
-    from . import hooks
-
-    return hooks.run(args.event)
 
 
 def cmd_mcp(args) -> int:
@@ -177,13 +136,27 @@ def cmd_mcp(args) -> int:
 
 
 def cmd_dream(args) -> int:
-    from . import dream
+    return dream.run(cwd=args.cwd, all_scopes=args.all)
 
-    return dream.run(force=args.force, cwd=args.cwd, all_scopes=args.all)
+
+class _Parser(argparse.ArgumentParser):
+    """Usage errors are invalid input, like every other bad argument.
+
+    argparse exits 2 on a usage error, but the JSON contract reserves 2 for a
+    version conflict. A caller that branches on the exit code would report a
+    bogus conflict (or read an empty stdout) for a typo, so usage errors exit 1
+    with the usual error object.
+    """
+
+    def error(self, message: str) -> None:
+        json.dump({"ok": False, "error": "invalid", "message": message}, sys.stdout)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        raise SystemExit(1)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="mem", description="Agent-agnostic memory store")
+    parser = _Parser(prog="mem", description="Agent-agnostic memory store")
     parser.add_argument("--root", help="override the memory root (default ~/.agents/memory)")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -195,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_scope(write)
     write.add_argument("--path", required=True, help="file name, e.g. pnpm-not-npm.md")
     write.add_argument("--name", help="stable slug for the memory")
-    write.add_argument("--description", default="", help="one line, used for retrieval")
+    write.add_argument("--description", default="", help="one line, used in the index")
     write.add_argument("--type", default=store.DEFAULT_TYPE, choices=store.TYPES)
     write.add_argument("--content", help="body text, or - for stdin")
     write.add_argument("--content-file", help="read the body from a file")
@@ -218,29 +191,17 @@ def build_parser() -> argparse.ArgumentParser:
     forget.add_argument("--path", required=True)
     forget.set_defaults(func=cmd_forget)
 
-    idx = sub.add_parser("index", help="print the MEMORY.md index block")
+    idx = sub.add_parser("index", help="print the MEMORY.md table of contents")
     idx.add_argument("--scope", choices=["global", "project", "all"], default="all")
     idx.add_argument("--cwd", default=".")
-    idx.add_argument("--rebuild", action="store_true", help="regenerate MEMORY.md from files")
     idx.set_defaults(func=cmd_index)
-
-    recall = sub.add_parser("recall", help="print memories relevant to a query")
-    recall.add_argument("query")
-    recall.add_argument("--cwd", default=".")
-    recall.add_argument("--top-k", type=int, default=0)
-    recall.set_defaults(func=cmd_recall)
-
-    hook = sub.add_parser("hook", help="run as an agent hook (JSON on stdin)")
-    hook.add_argument("event", choices=["session-start", "user-prompt", "session-end"])
-    hook.set_defaults(func=cmd_hook)
 
     sub.add_parser("mcp", help="serve MCP over stdio").set_defaults(func=cmd_mcp)
 
-    dream = sub.add_parser("dream", help="consolidate memories")
-    dream.add_argument("--cwd", default=".")
-    dream.add_argument("--all", action="store_true", help="every project, not just this one")
-    dream.add_argument("--force", action="store_true", help="ignore the session counter")
-    dream.set_defaults(func=cmd_dream)
+    consolidate = sub.add_parser("dream", help="consolidate memories now")
+    consolidate.add_argument("--cwd", default=".")
+    consolidate.add_argument("--all", action="store_true", help="every project, not just this one")
+    consolidate.set_defaults(func=cmd_dream)
 
     return parser
 
@@ -269,4 +230,9 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     except store.StoreError as exc:
         _emit({"ok": False, "error": "invalid", "message": str(exc)})
+        return 1
+    except OSError as exc:
+        # A missing --content-file, an unreadable directory, a path that turned
+        # out to be a directory: still the JSON contract, never a traceback.
+        _emit({"ok": False, "error": "io", "message": str(exc)})
         return 1
