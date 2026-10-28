@@ -11,7 +11,7 @@ maintain.
 
 Background and rationale: [`docs/`](docs/) — `research.md` (how Claude Code and Qoder actually
 work, and which claims are verified), `design.md` (the design and the alternatives dropped),
-`roadmap.md` (the phase plan, kept as history).
+`roadmap.md` (history), and `operations.md` (setup, env vars, and how to verify this machine).
 
 ## Status
 
@@ -142,7 +142,7 @@ memlib/dream.py      consolidation, called after every change and by `mem dream`
 memlib/mcp.py        MCP stdio server: memory_index / memory_read / memory_write
 memlib/cli.py        argparse surface
 PROTOCOL.md          the agent-facing contract, copied into the store root
-docs/                research.md, design.md, roadmap.md
+docs/                research.md, design.md, roadmap.md, operations.md
 tests/               unittest (stdlib only)
 ```
 
