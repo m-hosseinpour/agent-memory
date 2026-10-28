@@ -1,8 +1,8 @@
 # agent-memory
 
 A memory store shared by coding agents through one MCP server. Plain markdown on disk, one
-note per memory, indexed by a `MEMORY.md` table of contents — the same shape Claude Code and
-Qoder use, so the data stays readable by hand, by `grep`, and by those tools.
+note per memory, in Claude Code's note format and indexed by a `MEMORY.md` table of contents
+([`docs/research.md`](docs/research.md) §1), so the data stays readable by hand and by `grep`.
 
 The `mem` package holds every rule: the store, the index, consolidation, the MCP server. The
 CLI and the MCP server are two front doors to the same code. Any agent with an MCP client
@@ -102,6 +102,10 @@ For development, `./bin/mem` runs the checkout directly without installing anyth
 The store itself is just a directory: `mkdir -p ~/.agents/memory`, copy `PROTOCOL.md` into it,
 and register the MCP server. `MEM_ROOT` points `mem` at a different root (used by the tests).
 
+For Claude Code, also set `"autoMemoryEnabled": false` in `~/.claude/settings.json`: otherwise
+its native memory keeps writing beside this store and the two drift apart (see
+[`docs/design.md`](docs/design.md) §9–§10).
+
 ## Consolidation
 
 Every `mem write`/`mem forget` and every `memory_write` consolidates the scope it touched before
@@ -134,14 +138,15 @@ half of a pair gets deleted.
 
 ```
 $MEM_ROOT/
-├── PROTOCOL.md                # the written contract, for wiring an agent by hand
+├── PROTOCOL.md                # copied here by hand; no code creates it
 ├── global/{MEMORY.md,*.md}    # user-wide preferences and facts
 └── projects/<sanitized-path>/{MEMORY.md,*.md}
 ```
 
 `<sanitized-path>` is the absolute cwd with every unsafe character replaced by `-`
-(`/home/u/proj` → `-home-u-proj`), matching what Claude Code and Qoder use. There is no config
-file, no runtime state, and no git repository: the store is the notes and the index.
+(`/home/u/proj` → `-home-u-proj`), so each project gets one directory and no path escapes
+`$MEM_ROOT`. There is no config file, no runtime state, and no git repository: the store is the
+notes and the index.
 
 ## Layout
 
