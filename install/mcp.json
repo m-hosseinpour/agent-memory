@@ -2,7 +2,7 @@
   "_readme": [
     "Merge-only fragments for the mem MCP server. This file is not itself a client config; copy the section that matches your client.",
     "Claude Code: merge the object under \"claudeCode\" into the top-level mcpServers of ~/.claude.json (user scope) or of .mcp.json in the project root. Or run: claude mcp add-json mem '<the claudeCode.mcpServers.mem object>' --scope user",
-    "opencode: merge the object under \"opencode\" into ~/.config/opencode/opencode.json (its mcp key).",
+    "opencode 2.x: merge the \"mem\" entry under \"opencode.mcp.servers\" into ~/.config/opencode/opencode.json (its mcp.servers key).",
     "Adjust the command path if the checkout moves; mem is not installed on PATH.",
     "MEM_ROOT defaults to ~/.agents/memory; the project store is resolved from the server process's working directory, or from MEMORY_PROJECT_CWD when the client sets it.",
     "No autoMemoryEnabled and no hooks here: those belong to the hooks/opencode agents."
@@ -19,13 +19,15 @@
   },
   "opencode": {
     "mcp": {
-      "mem": {
-        "type": "local",
-        "command": [
-          "/home/mahdi/workspace/agent-memory/bin/mem",
-          "mcp"
-        ],
-        "enabled": true
+      "servers": {
+        "mem": {
+          "type": "local",
+          "command": [
+            "/home/mahdi/workspace/agent-memory/bin/mem",
+            "mcp"
+          ],
+          "enabled": true
+        }
       }
     }
   }

@@ -1,13 +1,15 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": [
+    "~/.agents/AGENTS.md",
     "~/.agents/memory/global/MEMORY.md"
   ],
   "mcp": {
     "servers": {
       "mem": {
         "type": "local",
-        "command": ["mem", "mcp"]
+        "command": ["/home/mahdi/workspace/agent-memory/bin/mem", "mcp"],
+        "enabled": true
       }
     }
   }

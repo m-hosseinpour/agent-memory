@@ -31,7 +31,21 @@ class InstallFragmentTests(unittest.TestCase):
 
         server = data["mcp"]["servers"]["mem"]
         self.assertEqual(server["type"], "local")
-        self.assertEqual(server["command"], ["mem", "mcp"])
+        self.assertTrue(server["command"][0].endswith("bin/mem"), server["command"])
+        self.assertEqual(server["command"][-1], "mcp")
+        self.assertTrue(server["enabled"])
+
+    def test_mcp_fragment_uses_the_same_servers_shape(self):
+        """The generic MCP fragment drifted to `mcp.mem` once; pin both shapes."""
+        data = json.loads((REPO / "install" / "mcp.json").read_text(encoding="utf-8"))
+        opencode = data["opencode"]["mcp"]["servers"]["mem"]
+        self.assertEqual(opencode["type"], "local")
+        self.assertTrue(opencode["command"][0].endswith("bin/mem"))
+        self.assertEqual(opencode["command"][-1], "mcp")
+
+        claude = data["claudeCode"]["mcpServers"]["mem"]
+        self.assertTrue(claude["command"].endswith("bin/mem"))
+        self.assertEqual(claude["args"], ["mcp"])
 
     def test_instructions_point_at_the_global_index(self):
         data = json.loads(INSTALL.read_text(encoding="utf-8"))
