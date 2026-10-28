@@ -254,7 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     dream.set_defaults(func=cmd_dream)
 
     extract = sub.add_parser("extract", help="extract memories from a finished session")
-    extract.add_argument("--transcript", required=True)
+    extract.add_argument("--transcript", default="")
     extract.add_argument("--agent", default="unknown")
     extract.add_argument("--session", default="")
     extract.add_argument("--cwd", default=".")

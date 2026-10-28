@@ -12,12 +12,14 @@ Design and research behind it: `~/.dsh/memory-system/` (`research.md`, `design.m
 
 ## Status
 
-Phase P0 is implemented: store, index, versioned writes, lexical recall, and the CLI.
+P0–P2 are implemented: the store, index, versioned writes, lexical recall, the CLI, the
+four adapters (Claude Code hooks, the MCP stdio server, the opencode V2 plugin, the DSH
+plugin), and the two background passes — `mem extract` (end-of-session extraction through a
+configurable command) and `mem dream` (session-counted consolidation, which also spawns
+itself once the session counter reaches `dream.every_sessions`).
 
-The four adapters are written: Claude Code hooks (`memlib/hooks.py`), the MCP stdio server
-(`memlib/mcp.py`), opencode (`integrations/opencode/`, V2 API), and DSH
-(`integrations/dsh/`). Still missing: `mem dream` and `mem extract`, so the extraction
-hooks are wired but no-op. See `HANDOFF.md`.
+What is left is installation, not code: bootstrapping the real store and wiring the agents'
+global configuration. `HANDOFF.md` lists the exact steps.
 
 ## Usage
 
@@ -40,10 +42,47 @@ EOF
 # adapters
 ./bin/mem hook session-start < payload.json   # Claude Code hook (JSON in, JSON out)
 ./bin/mem mcp                                 # MCP server on stdio
+
+# background passes
+./bin/mem extract --agent claude-code --session "$SESSION_ID" --transcript "$TRANSCRIPT"
+./bin/mem dream --cwd "$PWD"                  # consolidate global + this project
+./bin/mem dream --all                         # every project scope
+./bin/mem dream --force                       # ignore the session counter
 ```
 
 Exit codes: `0` ok, `1` invalid input, `2` version conflict (current content is returned so
 the caller can merge), `3` content looked like a secret and was refused.
+
+## Configuration
+
+`$MEM_ROOT/config.toml` (all keys optional):
+
+```toml
+[context]
+index_max_lines = 200            # cap on the injected index block
+
+[recall]
+select_threshold = 40            # below this many memories, recall never runs
+top_k = 8
+
+[extract]
+enabled = false                  # default off; turn it on deliberately
+command = "claude -p"            # the model call: prompt on stdin, JSON on stdout
+model = ""                       # informational; the model belongs inside `command`
+
+[dream]
+every_sessions = 5               # session counter that triggers consolidation
+```
+
+`mem extract` runs the command once, feeds it the new part of the transcript, and writes the
+memories it proposes. It is create-only: an existing file is skipped, never overwritten.
+The prompt asks for strict JSON, and every item still passes the normal secret scan and size
+cap. The command's working directory is the project.
+
+`mem dream` merges notes of the same type whose descriptions are near-identical, lets the
+newer of two notes with the same name replace the older, repairs `MEMORY.md`, appends a line
+to `dream.log`, and — when the store is a git repository — commits before and after the
+pass. It is deterministic (no model call) and idempotent: a second run changes nothing.
 
 ## Layout
 
@@ -53,12 +92,15 @@ memlib/store.py      files, frontmatter, version tokens, conflicts, secret refus
 memlib/index.py      MEMORY.md generation and budget capping
 memlib/config.py     root, config.toml subset, scope directories
 memlib/cli.py        argparse surface
-memlib/hooks.py      Claude Code hook adapter + the session counter (dream reuses it)
+memlib/hooks.py      Claude Code hook adapter + the session counter (dream, extract spawns)
 memlib/mcp.py        MCP stdio server: memory_read / memory_write / memory_search
-tests/               unittest (stdlib only), 96 tests
+memlib/dream.py      consolidation: dedupe, replace, index repair, git commits
+memlib/extract.py    transcript readers + one model call + write-through
+PROTOCOL.md          the agent-facing contract (copied into the store root)
+tests/               unittest (stdlib only), 168 tests
 integrations/opencode/  opencode V2 plugin (session.idle, compaction hook)
 integrations/dsh/       cordis plugin (prompt section, pre-step, turn-stopping, tools)
-install/             merge fragments: claude-code.json, mcp.json, opencode.json
+install/             merge fragments: claude-code.json, mcp.json, opencode.json, agents-md.md
 ```
 
 ## Store layout
@@ -66,13 +108,33 @@ install/             merge fragments: claude-code.json, mcp.json, opencode.json
 ```
 $MEM_ROOT/
 ├── config.toml
+├── PROTOCOL.md                              # copied from this repo
 ├── global/{MEMORY.md,*.md}                  # user-wide facts and preferences
 ├── projects/<sanitized-path>/{MEMORY.md,*.md}
-└── .state/state.json                        # session counter for `mem dream`
+├── .state/state.json                        # session counter for `mem dream`
+├── .state/extract.json                      # per-transcript offsets for `mem extract`
+├── .state/dream.lock                        # one consolidation at a time
+├── dream.log                                # one line per consolidation
+└── .git/                                    # optional; `mem dream` commits to it
 ```
 
 `<sanitized-path>` is the absolute cwd with every unsafe character replaced by `-`
 (`/home/u/proj` → `-home-u-proj`), matching what Claude Code and Qoder use.
+
+## Install
+
+There is no package to install: `bin/mem` runs straight from this checkout.
+
+1. Create the store and its repository:
+   `mkdir -p ~/.agents/memory && git -C ~/.agents/memory init`
+2. Copy the agent contract into it: `cp PROTOCOL.md ~/.agents/memory/PROTOCOL.md`
+3. Merge the relevant fragments from `install/` into each agent's configuration
+   (`claude-code.json`, `mcp.json`, `opencode.json`), and append `install/agents-md.md` to
+   `~/.agents/AGENTS.md` — Claude Code already imports that file.
+4. Set `"autoMemoryEnabled": false` in `~/.claude/settings.json` so the native store does not
+   run in parallel with this one.
+5. Extraction stays off until you pick a model: set `[extract] enabled = true` and
+   `command = "claude -p"` (or any command that reads the prompt on stdin and prints JSON).
 
 ## Tests
 
@@ -87,5 +149,14 @@ python3 -m unittest discover -s tests -v
   is cheap at this scale and makes drift impossible.
 - **`if_version` is mandatory** on write unless `--force` is passed: a blind overwrite is
   exactly what the token exists to prevent.
+- **Extraction is incremental.** The Stop hook fires on every turn, so `.state/extract.json`
+  remembers how far each transcript was already read; a short tail waits for the next turn
+  instead of buying a model call.
+- **Dream is deterministic.** It has no model: a "contradiction" is the same `name` and type,
+  where the newer `modified` wins, and duplicates are notes of one type whose descriptions
+  overlap by at least 80%. Rename-and-contradict is not detected; that is a deliberate
+  trade-off, not an oversight.
+- **Runtime state is not memory.** `.state/` and `dream.log` are ignored by the store's
+  repository; only notes and `MEMORY.md` are committed.
 - **Only the standard library.** No dependency to install, no build step.
 - When testing, set `MEM_ROOT` to a scratch directory. The default root is the real store.

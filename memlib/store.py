@@ -217,7 +217,10 @@ def list_memories(directory: Path) -> list[Memory]:
             memories.append(load(path))
         except OSError:
             continue
-    memories.sort(key=lambda m: m.modified, reverse=True)
+    # The filename tiebreaker keeps the order stable when two notes share a
+    # timestamp; otherwise the index could reorder between runs and dream's
+    # "second run changes nothing" guarantee would not hold.
+    memories.sort(key=lambda m: (m.modified, m.filename), reverse=True)
     return memories
 
 
@@ -303,7 +306,8 @@ def delete(directory: Path, filename: str) -> bool:
     return True
 
 
-def _tokens(text: str) -> set[str]:
+def tokens(text: str) -> set[str]:
+    """Words used for lexical matching; shared by recall and dream."""
     return {t for t in re.split(r"[^a-z0-9\u0600-\u06FF]+", text.lower()) if len(t) > 2}
 
 
@@ -313,12 +317,12 @@ def recall(memories: list[Memory], query: str, top_k: int = 8) -> list[tuple[flo
     Deterministic and free; the index is small enough that a model call would
     be wasted work. Returns (score, memory) sorted by score, zero-score dropped.
     """
-    wanted = _tokens(query)
+    wanted = tokens(query)
     if not wanted:
         return []
     scored = []
     for memory in memories:
-        haystack = _tokens(f"{memory.name} {memory.description} {memory.type}")
+        haystack = tokens(f"{memory.name} {memory.description} {memory.type}")
         if not haystack:
             continue
         overlap = len(wanted & haystack)

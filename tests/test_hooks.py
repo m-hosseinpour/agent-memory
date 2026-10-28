@@ -311,12 +311,15 @@ class StateTests(HookTestCase):
 
 class MalformedInputTests(HookTestCase):
     def test_malformed_stdin_exits_zero_and_stays_silent(self):
-        for raw in ("", "   ", "not json", "[1, 2]", "null", '"string"', '{"cwd": 5}'):
-            for event in ("session-start", "user-prompt", "session-end"):
-                with self.subTest(raw=raw, event=event):
-                    code, text = self.run_hook(event, raw=raw)
-                    self.assertEqual(code, 0)
-                    self.assertEqual(text, "")
+        # Seven session starts reach the dream threshold, so the trigger fires
+        # even here; the test is about input handling, not about launching it.
+        with mock.patch("memlib.hooks.subprocess.Popen"):
+            for raw in ("", "   ", "not json", "[1, 2]", "null", '"string"', '{"cwd": 5}'):
+                for event in ("session-start", "user-prompt", "session-end"):
+                    with self.subTest(raw=raw, event=event):
+                        code, text = self.run_hook(event, raw=raw)
+                        self.assertEqual(code, 0)
+                        self.assertEqual(text, "")
 
     def test_unreadable_stdin_exits_zero(self):
         class BrokenStdin:

@@ -254,9 +254,8 @@ function dshHome() {
 
 /**
  * Locate this session's persisted log, if the store uses the JSONL backend.
- * `mem extract` declares `--transcript` required, so this is best effort:
- * without a hit the command still runs with the session id and fails silently,
- * like every other extract failure.
+ * `--transcript` is optional: `mem extract` also resolves a DSH session from
+ * `--session` alone, so a miss here only means one more directory scan there.
  */
 function transcriptPath(sessionId) {
   if (typeof sessionId !== 'string' || sessionId === '') return '';

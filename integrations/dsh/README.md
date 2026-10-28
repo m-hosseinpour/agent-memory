@@ -90,10 +90,10 @@ this session's log for `--transcript`), and everything `mem` itself reads
 
 ## Notes and limits
 
-- `mem extract` is fired detached on every turn stop. Its module
-  (`memlib/extract.py`) is part of the next phase, so today the child exits
-  with a silent `ImportError`; the store's `extract.enabled` (default false)
-  is expected to keep it a no-op once that module lands.
+- `mem extract` is fired detached on every turn stop, but only does work when
+  `extract.enabled` is true (default false). The plugin passes the session id
+  and, when it can find it, the session log path; `mem extract` resolves a DSH
+  transcript from the session id alone otherwise.
 - The recall message is a normal user-role message tagged with source
   `memory`; it is persisted in the session log like any other injected context.
 - The plugin imports only Node builtins; it does not depend on

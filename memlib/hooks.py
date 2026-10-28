@@ -26,6 +26,9 @@ exactly one reader/writer in this module, so `mem dream` imports `session_count(
   failure before the write (e.g. an unwritable root) skips it.
 * `reset_sessions()` is the only thing that zeroes it; `mem dream` calls it after
   a successful consolidation.
+* When the count reaches `dream.every_sessions`, `session-start` also spawns
+  `mem dream` detached, so consolidation happens without anyone remembering to
+  run it. The spawn is best effort, like every other hook action.
 * `session-end` never increments; it only flushes the current count and records
   why the session ended.
 
@@ -163,14 +166,27 @@ def _write_state(state: dict) -> None:
 
 
 def _session_start(payload: dict, out_stream) -> None:
+    count = None
     try:
-        bump_session(_session_id(payload))
+        count = bump_session(_session_id(payload))
     except Exception as exc:
         # The index still gets injected when only the state write fails.
         _log("session-start: state not updated: {}: {}".format(exc.__class__.__name__, exc))
+    if count is not None and count >= _dream_threshold():
+        try:
+            _spawn_dream(_cwd(payload))
+        except Exception as exc:
+            _log("session-start: dream not started: {}: {}".format(exc.__class__.__name__, exc))
     text = _index_context(_cwd(payload))
     if text:
         _emit(out_stream, "session-start", text)
+
+
+def _dream_threshold() -> int:
+    """Sessions between consolidations; zero or less means every session."""
+    settings = config.load()
+    default = config.DEFAULTS["dream"]["every_sessions"]
+    return _as_int(config.get("dream", "every_sessions", settings), default)
 
 
 def _user_prompt(payload: dict, out_stream) -> None:
@@ -347,14 +363,23 @@ def _as_int(value, default: int) -> int:
 
 
 # --------------------------------------------------------------------------
-# stop: fire-and-forget extraction
+# detached children: stop -> extract, session-start at the dream threshold
 
 
 def _spawn_extract(payload: dict) -> None:
     """Start `mem extract` fully detached; never wait for it."""
-    command, env = _extract_command(payload)
+    _spawn(_extract_command(payload))
+
+
+def _spawn_dream(cwd: str) -> None:
+    """Start `mem dream` fully detached; the counter check already passed."""
+    _spawn(_launcher(["dream", "--cwd", cwd]))
+
+
+def _spawn(command: tuple[list[str], dict | None]) -> None:
+    argv, env = command
     subprocess.Popen(
-        command,
+        argv,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -366,17 +391,23 @@ def _spawn_extract(payload: dict) -> None:
 
 def _extract_command(payload: dict) -> tuple[list[str], dict | None]:
     transcript = payload.get("transcript_path")
-    args = [
-        "extract",
-        "--transcript",
-        transcript if isinstance(transcript, str) else "",
-        "--agent",
-        AGENT,
-        "--session",
-        _session_id(payload) or "",
-        "--cwd",
-        _cwd(payload),
-    ]
+    return _launcher(
+        [
+            "extract",
+            "--transcript",
+            transcript if isinstance(transcript, str) else "",
+            "--agent",
+            AGENT,
+            "--session",
+            _session_id(payload) or "",
+            "--cwd",
+            _cwd(payload),
+        ]
+    )
+
+
+def _launcher(args: list[str]) -> tuple[list[str], dict | None]:
+    """A command line for this checkout, with no install required."""
     repo = Path(__file__).resolve().parent.parent
     launcher = repo / "bin" / "mem"
     try:
