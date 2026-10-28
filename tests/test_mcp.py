@@ -292,6 +292,20 @@ class ReadWriteTests(McpTestCase):
             store.load(self.project_dir() / "pnpm-not-npm.md").body, "Second body wins."
         )
 
+    def test_conflict_payload_tolerates_non_utf8_bytes(self):
+        _, responses, _ = self.serve(
+            [self.call("memory_write", self.write_new(), request_id=1)]
+        )
+        first = self.payload(responses[0])
+        document = self.project_dir() / "pnpm-not-npm.md"
+        document.write_bytes(document.read_bytes() + b"\xff\n")
+        _, responses, _ = self.serve(
+            [self.call("memory_write", self.write_new(if_version=first["version"]), request_id=2)]
+        )
+        conflict = self.error_payload(responses[0])
+        self.assertEqual(conflict["error"], "conflict")
+        self.assertIn("\ufffd", conflict["current"]["raw"])
+
     def test_new_on_existing_file_conflicts(self):
         _, responses, _ = self.serve(
             [self.call("memory_write", self.write_new(), request_id=1)]

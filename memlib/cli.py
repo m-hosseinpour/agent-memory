@@ -68,7 +68,8 @@ def cmd_write(args) -> int:
 
 def cmd_read(args) -> int:
     directory = config.scope_dir(args.scope, args.cwd)
-    path = directory / args.path
+    filename = store.check_filename(args.path)
+    path = directory / filename
     if not path.is_file():
         raise store.StoreError(f"no such memory: {args.path}")
     memory = store.load(path)
@@ -81,7 +82,7 @@ def cmd_read(args) -> int:
             "modified": memory.modified,
             "version": memory.version,
             "content": memory.body,
-            "raw": path.read_text(encoding="utf-8"),
+            "raw": path.read_text(encoding="utf-8", errors="replace"),
         }
     )
 
@@ -220,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
             payload["current"] = {
                 "version": exc.current.version,
                 "content": exc.current.body,
-                "raw": exc.current.path.read_text(encoding="utf-8"),
+                "raw": exc.current.path.read_text(encoding="utf-8", errors="replace"),
             }
         json.dump(payload, sys.stdout, ensure_ascii=False)
         sys.stdout.write("\n")
@@ -230,6 +231,10 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     except store.StoreError as exc:
         _emit({"ok": False, "error": "invalid", "message": str(exc)})
+        return 1
+    except UnicodeDecodeError as exc:
+        # A content file or stdin that is not UTF-8: invalid input, not a crash.
+        _emit({"ok": False, "error": "invalid", "message": f"input is not valid UTF-8: {exc}"})
         return 1
     except OSError as exc:
         # A missing --content-file, an unreadable directory, a path that turned

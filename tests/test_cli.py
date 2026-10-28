@@ -179,6 +179,39 @@ class ReadListForgetContractTests(CliTestCase):
         self.assertEqual(code, 1)
         self.assertEqual(data["error"], "invalid")
 
+    def test_read_cannot_escape_the_scope(self):
+        self.create("n.md")
+        secret = self.root / "secret.txt"
+        secret.write_text("SECRET-DATA", encoding="utf-8")
+        for path in ("../../secret.txt", str(secret)):
+            code, data = self.json_cli(
+                "read", "--scope", "project", "--cwd", str(self.cwd), "--path", path
+            )
+            self.assertEqual(code, 1, path)
+            self.assertEqual(data["error"], "invalid", path)
+            self.assertNotIn("SECRET-DATA", json.dumps(data), path)
+
+    def test_read_refuses_the_generated_index(self):
+        self.create("n.md")
+        self.assertTrue((self.project_dir() / "MEMORY.md").is_file())
+        code, data = self.json_cli(
+            "read", "--scope", "project", "--cwd", str(self.cwd), "--path", "MEMORY.md"
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(data["error"], "invalid")
+
+    def test_read_survives_non_utf8_bytes(self):
+        self.create("n.md")
+        path = self.project_dir() / "n.md"
+        path.write_bytes(b'---\nname: "n"\ndescription: "d"\n---\n\nplain \xff body\n')
+        code, data = self.json_cli(
+            "read", "--scope", "project", "--cwd", str(self.cwd), "--path", "n.md"
+        )
+        self.assertEqual(code, 0, data)
+        self.assertIn("plain", data["content"])
+        self.assertIn("\ufffd", data["content"])
+        self.assertIn("\ufffd", data["raw"])
+
     def test_list_shape(self):
         self.create("a.md", "body", description="first")
         code, data = self.json_cli("list", "--scope", "project", "--cwd", str(self.cwd))
@@ -341,6 +374,16 @@ class CliErrorShapeTests(CliTestCase):
         )
         self.assertEqual(code, 1)
         self.assertEqual((data["ok"], data["error"]), (False, "io"))
+
+    def test_a_non_utf8_content_file_is_invalid(self):
+        body = self.root / "body.bin"
+        body.write_bytes(b"plain \xff body")
+        code, data = self.json_cli(
+            *self.write_args("x.md", content_file=body, if_version="new")
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual((data["ok"], data["error"]), (False, "invalid"))
+        self.assertFalse((self.project_dir() / "x.md").exists())
 
     def test_a_dotdot_path_is_refused_as_invalid(self):
         code, data = self.json_cli(

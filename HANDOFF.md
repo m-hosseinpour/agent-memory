@@ -9,8 +9,9 @@
 
 ## نقطهٔ شروع
 
-- نسخه ۰.۲.۰؛ HEAD همان `dcb5d4d` است (تغییرات مستندات این دور هنوز commit نشده‌اند).
-- تست پایه: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v` → ۹۶ تست سبز.
+- نسخه ۰.۲.۰؛ آخرین commit پیش از این دور `3c1758f` است (اصلاح A ممکن است هنوز در working
+  tree باشد؛ `git status` را ببینید).
+- تست پایه: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v` → ۱۰۱ تست سبز.
   pytest نصب نیست و لازم هم نیست؛ تست‌های تازه را در همان فایل‌های موجود و با `unittest` بنویسید.
 - تصمیم‌های بسته در `docs/design.md` §۱۱ هستند؛ بدون دلیل تازه بازشان نکنید.
 - روش کار: اول بازتولید، بعد اصلاح، بعد همان بازتولید و همان تست‌ها دوباره. اگر تغییری رفتار
@@ -22,50 +23,10 @@
 
 | # | پرسش | پیشنهاد |
 |---|---|---|
-| D1 | `mem read` روی `MEMORY.md` باید کار کند یا رد شود؟ | رد شود؛ با `write`/`forget` هم‌رفتار و `mem index` جای آن است. |
 | D2 | کلیدهای فرانت‌مترِ دست‌نویس (مثل `title`) در بازنویسی بمانند؟ | بمانند، فقط اسکالرها: `render` می‌تواند بنویسدشان و امروز هر بازنویسی دورشان می‌ریزد. توجه: `Memory.title` از `name` ساخته می‌شود، نه از کلید `title`. |
 | D3 | آستانهٔ ادغام (۰.۸) عوض شود، شرط تازه بگیرد، یا فقط مستند شود؟ | اول روی دادهٔ واقعی بشمارید (با اجازهٔ کاربر)، بعد با کاربر تصمیم بگیرید. |
 | D4 | `description` چندخطی: رد شود یا پشتیبانی شود؟ | در نوشتن رد شود؛ پارس `>`/`\|` فقط اگر ارزان بود. |
 | D5 | `originSessionId` در نوشته‌های MCP: آرگومان `session` بگیرد یا فیلد حذف شود؟ | تصمیم با کاربر؛ تا آن‌وقت فیلد خالی دروغ است. |
-| D6 | بایت غیر UTF-8 در `mem read`/MCP: جایگزینی یا خطا؟ | `errors="replace"` مثل `store.load`، تا یک فایل دست‌نویس کل ابزار را نشکند. |
-
-## A. `mem read` مسیر دلخواه و فایل غیر UTF-8 را می‌خواند — P1
-
-**بازتولید** (دایرکتوری scope باید وجود داشته باشد، پس اول یک یادداشت بنویسید):
-
-```bash
-export MEM_ROOT=$(mktemp -d) PROJ=$(mktemp -d)
-echo SECRET-DATA > "$MEM_ROOT/secret.txt"
-./bin/mem write --scope project --cwd "$PROJ" --path n.md --name n \
-  --description d --if-version new --content body
-./bin/mem read --scope project --cwd "$PROJ" --path ../../secret.txt
-# خروجی ۰ و {"path": ".../projects/<slug>/../../secret.txt", ..., "content": "SECRET-DATA"}
-```
-
-مسیر `..` پاک‌سازی نمی‌شود و `load` هر فایلی را که وجود داشته باشد می‌خواند؛ `--path` مطلق هم
-همین‌طور کار می‌کند. `MEMORY.md` هم الان خوانده می‌شود (با نام `MEMORY` و نوع `project`) —
-یعنی D1 تصمیم دربارهٔ تغییر رفتار است، نه رفع باگ.
-
-**علت:** `cmd_read` در [`memlib/cli.py:71`](memlib/cli.py#L71) مسیر را مستقیم به دایرکتوری
-scope می‌چسباند و `store._check_filename` را صدا نمی‌زند؛ `write`، `delete` و MCP همه این
-بررسی را دارند، پس فقط CLI نشت دارد.
-
-**اصلاح:** در `cmd_read` اول `store._check_filename(args.path)` و بعد `store.load(...)`. اگر
-تابع را عمومی‌تر کردید (`check_filename`)، `write`/`delete` را هم به آن منتقل کنید تا یک نسخه
-بماند. طبق D1 رفتار `MEMORY.md` را مشخص کنید.
-
-**نیمهٔ دوم — رمزگشایی سخت‌گیرانه:** [`memlib/cli.py:84`](memlib/cli.py#L84) و
-[`memlib/cli.py:223`](memlib/cli.py#L223) با `encoding="utf-8"` بدون `errors` می‌خوانند؛
-برای یادداشت دست‌نویس غیر UTF-8 تراک‌بک می‌دهند. `store.load` خودش `errors="replace"` دارد
-([`memlib/store.py:210`](memlib/store.py#L210))، پس همین سیاست را در CLI هم به کار ببرید.
-در MCP، `_current_payload` ([`memlib/mcp.py:258`](memlib/mcp.py#L258)) فقط `OSError` را
-می‌گیرد؛ `UnicodeDecodeError` از آن رد می‌شود و به `internal` می‌رسد. طبق D6.
-
-**تست‌ها:** `read --path ../../secret.txt` (خارج از scope)، `--path` مطلق، `--path MEMORY.md`
-(طبق D1)، و فایل با بایت `0xff` در بدنه — همه بدون تراک‌بک و با JSON خطا (یا محتوای درست، طبق D6).
-
-**معیار انجام:** هیچ ورودی `--path` نتواند بیرون از دایرکتوری scope بخواند؛ هیچ بایتی تراک‌بک
-نسازد؛ MCP تغییری در رفتار ندهد.
 
 ## B. بازنویسی، متادیتای یادداشت را بازنشانی می‌کند — P1
 
@@ -203,7 +164,7 @@ ls "$MEM_ROOT"/projects/*/     # فقط MEMORY.md و b.md؛ a.md همان لحظ
 | F5 | [`docs/design.md:118`](docs/design.md#L118) | می‌گوید `memory_index` «متن `MEMORY.md`» را برمی‌گرداند؛ در واقع از روی فایل‌ها render می‌کند و فایل دست‌کاری‌شده را نمی‌خواند | «فهرست را از روی فایل‌ها می‌سازد و برمی‌گرداند» |
 | F6 | [`README.md:122-128`](README.md#L122-L128) | `PROTOCOL.md` در layout انبار آمده، ولی هیچ کدی نمی‌سازدش (فقط دستی کپی می‌شود) | layout را با «دستی کپی می‌شود» هم‌خوان کنید |
 | F7 | [`docs/roadmap.md:45`](docs/roadmap.md#L45) | معیار پذیرش «از Claude Code و opencode هم خوانده می‌شود» در این مخزن قابل بررسی نیست | علامت «تحقق‌نیافته» بزنید یا حذفش کنید |
-| F8 | `docs/operations.md` و README | بعد از اصلاح A–E، بخش «محدودیت‌ها» و «Consolidation» را با رفتار جدید هم‌خوان کنید | در همان commit اصلاح |
+| F8 | `docs/operations.md` و README | بعد از اصلاح B–E، بخش «محدودیت‌ها» و «Consolidation» را با رفتار جدید هم‌خوان کنید | در همان commit اصلاح |
 
 ## G. ریزها — P3
 
@@ -222,8 +183,7 @@ ls "$MEM_ROOT"/projects/*/     # فقط MEMORY.md و b.md؛ a.md همان لحظ
   (D5).
 - [`memlib/mcp.py:36`](memlib/mcp.py#L36) می‌گوید «Verified against the MCP lifecycle spec»
   بدون ارجاع؛ لینک بدهید یا ادعا را بردارید.
-- تست ندارد: سقف ۱۰۰KB، `--session`، traversal در read، حفظ متادیتا، description چندخطی.
-  با A/B/E اضافه می‌شوند.
+- تست ندارد: سقف ۱۰۰KB، `--session`، حفظ متادیتا، description چندخطی. با B/E اضافه می‌شوند.
 
 ## خارج از محدوده
 
@@ -238,7 +198,7 @@ design §۹ و §۱۱. تصمیم‌های باز در design §۱۲
 ## پایان کار
 
 1. `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v` — همه سبز، با تست‌های تازه.
-2. بازتولیدهای A/B/C/E را دوباره اجرا کنید: هر کدام باید رفتار درست بدهد.
+2. بازتولیدهای B/C/E را دوباره اجرا کنید: هر کدام باید رفتار درست بدهد.
 3. `git diff` را بخوانید؛ هر تغییر در رفتار باید در README/design/operations منعکس شده باشد.
 4. اگر کاربر خواست، `uv tool install --reinstall .` تا ایجنت‌ها کد تازه را ببینند
    (وگرنه `mem` روی PATH همان نسخهٔ قدیمی می‌ماند).

@@ -246,7 +246,7 @@ def list_memories(directory: Path) -> list[Memory]:
     return memories
 
 
-def _check_filename(filename: str) -> str:
+def check_filename(filename: str) -> str:
     if (
         "/" in filename
         or "\\" in filename
@@ -255,7 +255,7 @@ def _check_filename(filename: str) -> str:
     ):
         raise StoreError("filename must be a flat name ending in .md")
     if filename == "MEMORY.md":
-        raise StoreError("MEMORY.md is generated; choose another name")
+        raise StoreError("MEMORY.md is the generated index, not a memory")
     if any(ch in filename for ch in "\r\n\0"):
         raise StoreError("filename must not contain control characters")
     return filename
@@ -282,7 +282,7 @@ def write(
     """
     if memory_type not in TYPES:
         raise StoreError(f"unknown type {memory_type!r}; expected one of {', '.join(TYPES)}")
-    _check_filename(filename)
+    check_filename(filename)
     if if_version is None and not force:
         raise StoreError("if_version is required (pass the version from read, or 'new')")
 
@@ -341,7 +341,7 @@ def delete(directory: Path, filename: str, if_version: str | None = None) -> boo
     load-then-delete could not promise that: a write landing between the two
     steps would be deleted by a guard that had already passed.
     """
-    _check_filename(filename)
+    check_filename(filename)
     if not directory.is_dir():
         return False
     path = directory / filename

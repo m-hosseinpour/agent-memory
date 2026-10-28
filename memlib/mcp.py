@@ -257,7 +257,7 @@ def _ok(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _current_payload(memory: store.Memory) -> dict[str, Any]:
     try:
-        raw = memory.path.read_text(encoding="utf-8")
+        raw = memory.path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         raw = memory.body
     return {"version": memory.version, "content": memory.body, "raw": raw}

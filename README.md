@@ -167,6 +167,9 @@ python3 -m unittest discover -s tests -v
   take an `flock` on the scope directory for the read-check-replace, because a token check
   without a lock is check-then-act: two writers holding the same token would both pass. The lock
   is a kernel lock on an inode — no file, no state, and it dies with the process.
+- **`mem read` takes a flat `.md` name.** `..`, absolute paths and `MEMORY.md` are refused; the
+  generated index is `mem index`. A hand-written file with invalid UTF-8 is decoded with
+  replacement characters instead of failing the command.
 - **`PROTOCOL.md` is not part of the agent's onboarding.** The MCP `instructions` field is. The
   protocol file is only for connecting an agent that has no MCP client.
 - When testing, set `MEM_ROOT` to a scratch directory. The default root is the real store.
