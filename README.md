@@ -8,7 +8,10 @@ the same shape Claude Code and Qoder already use, so the data stays readable by 
 `grep`, and by those tools. The `mem` CLI is the only place logic lives; every agent
 adapter is a thin caller of it.
 
-Design and research behind it: `~/.dsh/memory-system/` (`research.md`, `design.md`, `roadmap.md`).
+Design and research behind it: [`docs/`](docs/) — `research.md` (how Claude Code and Qoder
+actually work, and which claims are verified), `design.md` (the design, with the decisions
+and the alternatives that were dropped), `roadmap.md` (the phase plan and its acceptance
+criteria).
 
 ## Status
 
@@ -102,6 +105,7 @@ memlib/mcp.py        MCP stdio server: memory_read / memory_write / memory_searc
 memlib/dream.py      consolidation: dedupe, replace, index repair, git commits
 memlib/extract.py    transcript readers + one model call + write-through
 PROTOCOL.md          the agent-facing contract (copied into the store root)
+docs/                research.md, design.md, roadmap.md — the background, kept in-repo
 tests/               unittest (stdlib only), 168 tests
 integrations/opencode/  opencode V2 plugin (session.idle, compaction hook)
 integrations/dsh/       cordis plugin (prompt section, pre-step, turn-stopping, tools)

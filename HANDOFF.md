@@ -9,8 +9,8 @@ wired into Claude Code and opencode; the DSH plugin install is the one remaining
 
 ## Read these first
 
-1. `~/.dsh/memory-system/design.md` — the design being implemented (short: ~250 lines).
-2. `~/.dsh/memory-system/research.md` — how Claude Code and Qoder actually work, and which
+1. `docs/design.md` — the design being implemented (short: ~250 lines).
+2. `docs/research.md` — how Claude Code and Qoder actually work, and which
    claims are verified vs unverified. Read this before assuming anything about their APIs.
 3. `README.md` here — how to run the CLI, the config keys, and the install steps.
 4. `memlib/store.py`, `memlib/index.py`, `memlib/config.py` and `memlib/cli.py` — the
