@@ -170,6 +170,59 @@ class WriteContractTests(CliTestCase):
         self.assertEqual(code, 0)
         self.assertEqual(store.load(self.project_dir() / "file.md").body, "from a file")
 
+    def test_rewrite_with_only_content_keeps_the_note(self):
+        self.create(
+            "u.md", "x", name="prefers-vim", description="prefers vim", type="user"
+        )
+        version = store.load(self.project_dir() / "u.md").version
+        code, data = self.json_cli(
+            "write", "--scope", "project", "--cwd", str(self.cwd), "--path", "u.md",
+            "--content", "x, fixed typo", "--if-version", version,
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue(data["ok"])
+        memory = store.load(self.project_dir() / "u.md")
+        self.assertEqual(
+            (memory.name, memory.description, memory.type),
+            ("prefers-vim", "prefers vim", "user"),
+        )
+        _, text = self.run_cli("index", "--cwd", str(self.cwd))
+        self.assertIn("## user (1)", text)
+        self.assertIn("- [Prefers vim](u.md) — prefers vim", text)
+
+    def test_force_rewrite_with_only_content_keeps_the_note(self):
+        self.create(
+            "u.md", "x", name="prefers-vim", description="prefers vim", type="user"
+        )
+        code, data = self.json_cli(
+            "write", "--scope", "project", "--cwd", str(self.cwd),
+            "--path", "u.md", "--content", "forced", "--force",
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue(data["ok"])
+        memory = store.load(self.project_dir() / "u.md")
+        self.assertEqual(
+            (memory.name, memory.description, memory.type),
+            ("prefers-vim", "prefers vim", "user"),
+        )
+
+    def test_explicit_flags_still_change_the_note(self):
+        self.create(
+            "u.md", "x", name="prefers-vim", description="prefers vim", type="user"
+        )
+        version = store.load(self.project_dir() / "u.md").version
+        code, _ = self.json_cli(
+            "write", "--scope", "project", "--cwd", str(self.cwd), "--path", "u.md",
+            "--content", "x", "--if-version", version,
+            "--name", "edits-in-vim", "--description", "edits in vim", "--type", "feedback",
+        )
+        self.assertEqual(code, 0)
+        memory = store.load(self.project_dir() / "u.md")
+        self.assertEqual(
+            (memory.name, memory.description, memory.type),
+            ("edits-in-vim", "edits in vim", "feedback"),
+        )
+
 
 class ReadListForgetContractTests(CliTestCase):
     def test_read_of_a_missing_memory_is_exit_1(self):

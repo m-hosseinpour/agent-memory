@@ -100,6 +100,103 @@ class WriteTests(unittest.TestCase):
         with self.assertRaises(store.StoreError):
             store.write(self.dir, "a.md", "body", if_version="new", memory_type="gotcha")
 
+    def test_rewrite_keeps_fields_the_caller_did_not_pass(self):
+        # The 0.2.0 bug: a body-only rewrite reset name, description and type.
+        first = store.write(
+            self.dir,
+            "u.md",
+            "x",
+            name="prefers-vim",
+            description="prefers vim",
+            memory_type="user",
+            if_version="new",
+        )
+        again = store.write(self.dir, "u.md", "x, fixed typo", if_version=first.version)
+        self.assertEqual(again.name, "prefers-vim")
+        self.assertEqual(again.description, "prefers vim")
+        self.assertEqual(again.type, "user")
+        self.assertEqual(again.body, "x, fixed typo")
+        self.assertEqual(index.line_for(again), "- [Prefers vim](u.md) — prefers vim")
+
+    def test_rewrite_changes_only_the_fields_it_passes(self):
+        first = store.write(
+            self.dir,
+            "u.md",
+            "x",
+            name="prefers-vim",
+            description="prefers vim",
+            memory_type="user",
+            if_version="new",
+        )
+        again = store.write(
+            self.dir, "u.md", "x", description="edits in vim", if_version=first.version
+        )
+        self.assertEqual(again.description, "edits in vim")
+        self.assertEqual((again.name, again.type), ("prefers-vim", "user"))
+
+    def test_an_explicit_empty_description_clears_it(self):
+        first = store.write(
+            self.dir, "u.md", "x", description="prefers vim", if_version="new"
+        )
+        again = store.write(self.dir, "u.md", "x", description="", if_version=first.version)
+        self.assertEqual(again.description, "")
+
+    def test_force_rewrite_keeps_fields_the_caller_did_not_pass(self):
+        store.write(
+            self.dir,
+            "u.md",
+            "x",
+            name="prefers-vim",
+            description="prefers vim",
+            memory_type="user",
+            if_version="new",
+        )
+        forced = store.write(self.dir, "u.md", "forced", force=True)
+        self.assertEqual(
+            (forced.name, forced.description, forced.type),
+            ("prefers-vim", "prefers vim", "user"),
+        )
+
+    def test_a_new_file_without_fields_gets_the_defaults(self):
+        memory = store.write(self.dir, "fresh.md", "body", if_version="new")
+        self.assertEqual((memory.name, memory.description, memory.type), ("fresh", "", "project"))
+
+    def test_an_empty_name_falls_back_instead_of_blanking_the_file(self):
+        first = store.write(self.dir, "u.md", "x", name="prefers-vim", if_version="new")
+        memory = store.write(self.dir, "u.md", "y", name="", if_version=first.version)
+        self.assertEqual(memory.name, "prefers-vim")
+
+    def test_a_bad_type_on_rewrite_is_refused_and_leaves_the_file_alone(self):
+        first = store.write(self.dir, "u.md", "x", if_version="new")
+        with self.assertRaises(store.StoreError):
+            store.write(self.dir, "u.md", "y", if_version=first.version, memory_type="gotcha")
+        self.assertEqual(store.load(self.dir / "u.md").body, "x")
+
+    def test_rewrite_drops_frontmatter_keys_the_store_does_not_own(self):
+        # D2 rejected (design §11): only name, description and metadata survive a
+        # rewrite; a hand-written `title` is dropped rather than carried unmanaged.
+        path = self.dir / "vim.md"
+        path.write_text(
+            "---\n"
+            "name: prefers-vim\n"
+            'title: "Vim, not VS Code"\n'
+            "description: edits in vim\n"
+            "metadata:\n"
+            "  type: user\n"
+            "  modified: 2026-10-01T00:00:00.000Z\n"
+            "---\n\nx\n",
+            encoding="utf-8",
+        )
+        memory = store.write(
+            self.dir,
+            "vim.md",
+            "x, fixed typo",
+            if_version=store.version_of(path.read_bytes()),
+        )
+        self.assertNotIn("title", memory.meta)
+        self.assertEqual(memory.title, "Prefers vim")
+        self.assertEqual((memory.name, memory.type), ("prefers-vim", "user"))
+
     def test_delete(self):
         store.write(self.dir, "a.md", "one", if_version="new")
         self.assertTrue(store.delete(self.dir, "a.md"))

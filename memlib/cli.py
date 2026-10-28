@@ -43,7 +43,7 @@ def cmd_write(args) -> int:
         args.path,
         _read_content(args),
         name=args.name,
-        description=args.description or "",
+        description=args.description,
         memory_type=args.type,
         if_version=args.if_version,
         session_id=args.session,
@@ -168,9 +168,18 @@ def build_parser() -> argparse.ArgumentParser:
     write = sub.add_parser("write", help="create or replace a memory")
     add_scope(write)
     write.add_argument("--path", required=True, help="file name, e.g. pnpm-not-npm.md")
-    write.add_argument("--name", help="stable slug for the memory")
-    write.add_argument("--description", default="", help="one line, used in the index")
-    write.add_argument("--type", default=store.DEFAULT_TYPE, choices=store.TYPES)
+    write.add_argument("--name", help="stable slug for the memory (default: keep the current one)")
+    write.add_argument(
+        "--description",
+        default=None,
+        help="one line, used in the index (default: keep the current one; \"\" clears it)",
+    )
+    write.add_argument(
+        "--type",
+        default=None,
+        choices=store.TYPES,
+        help="memory type (default: keep the current one; project for a new note)",
+    )
     write.add_argument("--content", help="body text, or - for stdin")
     write.add_argument("--content-file", help="read the body from a file")
     write.add_argument("--if-version", dest="if_version", help="version from read, or 'new'")

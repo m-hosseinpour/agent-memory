@@ -257,6 +257,92 @@ class ReadWriteTests(McpTestCase):
         self.assertNotIn("npm install breaks CI", index_text)
         self.assertEqual(index_text.count("- ["), 1)
 
+    def test_rewrite_with_only_content_keeps_the_note(self):
+        _, responses, _ = self.serve(
+            [
+                self.call(
+                    "memory_write",
+                    self.write_new(path="u.md", name="prefers-vim", type="user"),
+                    request_id=1,
+                )
+            ]
+        )
+        first = self.payload(responses[0])
+        _, responses, _ = self.serve(
+            [
+                self.call(
+                    "memory_write",
+                    {
+                        "store": "project",
+                        "path": "u.md",
+                        "content": "x, fixed typo",
+                        "if_version": first["version"],
+                    },
+                    request_id=2,
+                )
+            ]
+        )
+        self.payload(responses[0])
+        memory = store.load(self.project_dir() / "u.md")
+        self.assertEqual(
+            (memory.name, memory.description, memory.type),
+            (
+                "prefers-vim",
+                "the lockfile is pnpm; npm install breaks CI",
+                "user",
+            ),
+        )
+        index_text = (self.project_dir() / "MEMORY.md").read_text(encoding="utf-8")
+        self.assertIn("## user (1)", index_text)
+        self.assertIn("the lockfile is pnpm; npm install breaks CI", index_text)
+
+    def test_explicit_arguments_still_change_the_note(self):
+        _, responses, _ = self.serve(
+            [self.call("memory_write", self.write_new(), request_id=1)]
+        )
+        first = self.payload(responses[0])
+        _, responses, _ = self.serve(
+            [
+                self.call(
+                    "memory_write",
+                    self.write_new(
+                        content="Updated body.",
+                        if_version=first["version"],
+                        name="renamed",
+                        description="second description",
+                        type="reference",
+                    ),
+                    request_id=2,
+                )
+            ]
+        )
+        self.payload(responses[0])
+        memory = store.load(self.project_dir() / "pnpm-not-npm.md")
+        self.assertEqual(
+            (memory.name, memory.description, memory.type),
+            ("renamed", "second description", "reference"),
+        )
+
+    def test_bad_type_is_invalid_params_even_on_a_rewrite(self):
+        _, responses, _ = self.serve(
+            [self.call("memory_write", self.write_new(), request_id=1)]
+        )
+        first = self.payload(responses[0])
+        _, responses, _ = self.serve(
+            [
+                self.call(
+                    "memory_write",
+                    self.write_new(
+                        content="x", if_version=first["version"], type="gotcha"
+                    ),
+                    request_id=2,
+                )
+            ]
+        )
+        error = responses[0]["error"]
+        self.assertEqual(error["code"], mcp.INVALID_PARAMS)
+        self.assertEqual(store.load(self.project_dir() / "pnpm-not-npm.md").type, "project")
+
     def test_conflict_carries_current_content_and_version(self):
         _, responses, _ = self.serve(
             [self.call("memory_write", self.write_new(), request_id=1)]

@@ -267,8 +267,8 @@ def write(
     body: str,
     *,
     name: str | None = None,
-    description: str = "",
-    memory_type: str = DEFAULT_TYPE,
+    description: str | None = None,
+    memory_type: str | None = None,
     if_version: str | None = None,
     session_id: str | None = None,
     force: bool = False,
@@ -279,9 +279,13 @@ def write(
     for a file that must not exist yet. Omitting it is refused unless `force`
     is set, because a blind overwrite is exactly what this guard exists to
     prevent.
+
+    `name`, `description` and `memory_type` default to `None`, meaning "keep
+    what the file already has"; a rewritten note keeps its identity unless the
+    caller passes a different value. For a new file they fall back to the
+    filename stem, an empty description and `project`. An explicit empty
+    description clears it; a blank name falls back instead of blanking the file.
     """
-    if memory_type not in TYPES:
-        raise StoreError(f"unknown type {memory_type!r}; expected one of {', '.join(TYPES)}")
     check_filename(filename)
     if if_version is None and not force:
         raise StoreError("if_version is required (pass the version from read, or 'new')")
@@ -292,7 +296,7 @@ def write(
     if not body.strip():
         raise StoreError("body is empty")
 
-    secret = find_secret(body) or find_secret(description)
+    secret = find_secret(body) or (find_secret(description) if description else None)
     if secret:
         raise SecretError(f"content looks like a secret (matched /{secret}/); refusing to store it")
 
@@ -314,16 +318,40 @@ def write(
         elif if_version not in (None, "new") and not force:
             raise StoreError(f"{filename} does not exist; pass if_version=new to create it")
 
+        # Fields the caller did not pass keep what the file already holds: a
+        # rewrite that carries only a body must not change the note's identity.
+        # Frontmatter keys beyond these three are dropped on purpose: the store
+        # owns the file format (design §11).
+        final_name = name or (existing.name if existing else path.stem)
+        final_description = (
+            description
+            if description is not None
+            else (existing.description if existing else "")
+        )
+        final_type = (
+            memory_type
+            if memory_type is not None
+            else (existing.type if existing else DEFAULT_TYPE)
+        )
+        if final_type not in TYPES:
+            raise StoreError(
+                f"unknown type {final_type!r}; expected one of {', '.join(TYPES)}"
+            )
+
         metadata = dict((existing.meta.get("metadata") if existing else {}) or {})
         metadata.update(
             {
                 "node_type": "memory",
-                "type": memory_type,
+                "type": final_type,
                 "originSessionId": session_id or metadata.get("originSessionId", ""),
                 "modified": now_iso(),
             }
         )
-        meta = {"name": name or path.stem, "description": description, "metadata": metadata}
+        meta = {
+            "name": final_name,
+            "description": final_description,
+            "metadata": metadata,
+        }
         text = render(meta, body + "\n")
 
         # Unique per process: two agents writing the same note must not interleave

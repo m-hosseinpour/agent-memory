@@ -10,7 +10,7 @@
 ## نقطهٔ شروع
 
 - نسخه ۰.۲.۰؛ وضعیت HEAD و working tree را با `git log -1` و `git status` ببینید.
-- تست پایه: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v` → ۱۰۱ تست سبز.
+- تست پایه: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v` → ۱۱۵ تست سبز.
   pytest نصب نیست و لازم هم نیست؛ تست‌های تازه را در همان فایل‌های موجود و با `unittest` بنویسید.
 - تصمیم‌های بسته در `docs/design.md` §۱۱ هستند؛ بدون دلیل تازه بازشان نکنید.
 - روش کار: اول بازتولید، بعد اصلاح، بعد همان بازتولید و همان تست‌ها دوباره. اگر تغییری رفتار
@@ -21,55 +21,9 @@
 
 | # | پرسش | پیشنهاد |
 |---|---|---|
-| D2 | کلیدهای فرانت‌مترِ دست‌نویس (مثل `title`) در بازنویسی بمانند؟ | بمانند، فقط اسکالرها: `render` می‌تواند بنویسدشان و امروز هر بازنویسی دورشان می‌ریزد. توجه: `Memory.title` از `name` ساخته می‌شود، نه از کلید `title`. |
 | D3 | آستانهٔ ادغام (۰.۸) عوض شود، شرط تازه بگیرد، یا فقط مستند شود؟ | اول روی دادهٔ واقعی بشمارید (با اجازهٔ کاربر)، بعد با کاربر تصمیم بگیرید. |
 | D4 | `description` چندخطی: رد شود یا پشتیبانی شود؟ | در نوشتن رد شود؛ پارس `>`/`\|` فقط اگر ارزان بود. |
 | D5 | `originSessionId` در نوشته‌های MCP: آرگومان `session` بگیرد یا فیلد حذف شود؟ | تصمیم با کاربر؛ تا آن‌وقت فیلد خالی دروغ است. |
-
-## B. بازنویسی، متادیتای یادداشت را بازنشانی می‌کند — P1
-
-**بازتولید:**
-
-```bash
-export MEM_ROOT=$(mktemp -d) PROJ=$(mktemp -d)
-./bin/mem write --scope project --cwd "$PROJ" --path u.md --name prefers-vim \
-  --description "prefers vim" --type user --if-version new --content "x"
-V=$(./bin/mem read --scope project --cwd "$PROJ" --path u.md | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])')
-./bin/mem write --scope project --cwd "$PROJ" --path u.md --content "x, fixed typo" --if-version "$V"
-./bin/mem read --scope project --cwd "$PROJ" --path u.md
-```
-
-خروجی: `name` شده `u`، `description` خالی، `type` شده `project`؛ خط ایندکس از بخش `user`
-به `project` رفته و description از آن حذف شده (`- [U](u.md)`). یعنی یک «اصلاح غلط تایپی»
-یادداشت را از نوع `user` به `project` می‌برد.
-
-**علت سه‌لایه است:**
-
-1. [`memlib/cli.py:46`](memlib/cli.py#L46) همیشه `description=args.description or ""` و
-   `memory_type=args.type` می‌فرستد و پارسر برای هر دو پیش‌فرض دارد
-   ([`memlib/cli.py:171-172`](memlib/cli.py#L171-L172)) — پس «حذف‌شده» از «خالی» قابل تشخیص نیست.
-2. [`memlib/store.py:326`](memlib/store.py#L326) `meta` را از صفر می‌سازد:
-   `name or path.stem`، `description` داده‌شده، `memory_type` داده‌شده. هر کلید دیگر
-   فرانت‌متر (مثل `title`) هم دور ریخته می‌شود، هرچند `render` آن‌ها را می‌نویسد.
-3. [`memlib/mcp.py:397-398`](memlib/mcp.py#L397-L398) همان کار را با `or ""` /
-   `or store.DEFAULT_TYPE` می‌کند.
-
-**اصلاح:** زنجیره را `None`-پذیر کنید: `description: str | None = None` و
-`memory_type: str | None = None` در `store.write`؛ بعد از `existing = load(path)` مقدارها را
-از `existing` بردارید (`name` هم همین‌طور) و فقط بعد اعتبارسنجی `type` را روی مقدار نهایی
-انجام دهید. بررسی راز فقط روی `description` ورودی، نه مقدار بازیابی‌شده. در CLI پیش‌فرض
-`--description`/`--type` را `None` کنید و در MCP `arguments.get(...)` بدهید (اعتبارسنجی
-`type` فقط وقتی صریح آمده). اگر فایل تازه است، `None` یعنی همان پیش‌فرض امروز (`""` و
-`project`). اگر D2 را قبول کردید، `meta` را با کلیدهای اسکالر `existing.meta`
-(به‌جز `name`/`description`/`metadata`) شروع کنید.
-
-**تست‌ها:** بازنویسی با فقط `content` و `if_version` (هم CLI، هم MCP) همه‌چیز را نگه دارد؛
-تغییر صریح `--type`/`--description`/`--name` کار کند؛ `--force` با فقط `content` هم بازنشانی
-نکند؛ `if_version=new` روی فایل موجود همچنان `conflict` بدهد؛ کلید `title` دست‌نویس بعد از
-بازنویسی در فایل بماند (در `Memory.meta` دیده شود).
-
-**معیار انجام:** هیچ فیلدی که فراخوان نفرستاده تغییر نکند؛ تست round-trip برای
-`write` ← `read` با و بدون `name`/`description`/`type`.
 
 ## C. MCP آرگومان ناشناس را بی‌صدا دور می‌ریزد — P1
 
@@ -162,7 +116,7 @@ ls "$MEM_ROOT"/projects/*/     # فقط MEMORY.md و b.md؛ a.md همان لحظ
 | F5 | [`docs/design.md:118`](docs/design.md#L118) | می‌گوید `memory_index` «متن `MEMORY.md`» را برمی‌گرداند؛ در واقع از روی فایل‌ها render می‌کند و فایل دست‌کاری‌شده را نمی‌خواند | «فهرست را از روی فایل‌ها می‌سازد و برمی‌گرداند» |
 | F6 | [`README.md:122-128`](README.md#L122-L128) | `PROTOCOL.md` در layout انبار آمده، ولی هیچ کدی نمی‌سازدش (فقط دستی کپی می‌شود) | layout را با «دستی کپی می‌شود» هم‌خوان کنید |
 | F7 | [`docs/roadmap.md:45`](docs/roadmap.md#L45) | معیار پذیرش «از Claude Code و opencode هم خوانده می‌شود» در این مخزن قابل بررسی نیست | علامت «تحقق‌نیافته» بزنید یا حذفش کنید |
-| F8 | `docs/operations.md` و README | بعد از اصلاح B–E، بخش «محدودیت‌ها» و «Consolidation» را با رفتار جدید هم‌خوان کنید | در همان commit اصلاح |
+| F8 | `docs/operations.md` و README | بعد از اصلاح C/E، بخش «محدودیت‌ها» و «Consolidation» را با رفتار جدید هم‌خوان کنید | در همان commit اصلاح |
 
 ## G. ریزها — P3
 
@@ -181,7 +135,7 @@ ls "$MEM_ROOT"/projects/*/     # فقط MEMORY.md و b.md؛ a.md همان لحظ
   (D5).
 - [`memlib/mcp.py:36`](memlib/mcp.py#L36) می‌گوید «Verified against the MCP lifecycle spec»
   بدون ارجاع؛ لینک بدهید یا ادعا را بردارید.
-- تست ندارد: سقف ۱۰۰KB، `--session`، حفظ متادیتا، description چندخطی. با B/E اضافه می‌شوند.
+- تست ندارد: سقف ۱۰۰KB، `--session`، description چندخطی (خط آخر با E اضافه می‌شود).
 
 ## خارج از محدوده
 
@@ -196,7 +150,7 @@ design §۹ و §۱۱. تصمیم‌های باز در design §۱۲
 ## پایان کار
 
 1. `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v` — همه سبز، با تست‌های تازه.
-2. بازتولیدهای B/C/E را دوباره اجرا کنید: هر کدام باید رفتار درست بدهد.
+2. بازتولیدهای C/E را دوباره اجرا کنید: هر کدام باید رفتار درست بدهد.
 3. `git diff` را بخوانید؛ هر تغییر در رفتار باید در README/design/operations منعکس شده باشد.
 4. اگر کاربر خواست، `uv tool install --reinstall .` تا ایجنت‌ها کد تازه را ببینند
    (وگرنه `mem` روی PATH همان نسخهٔ قدیمی می‌ماند).

@@ -20,6 +20,10 @@ the agent's back. `memory_index` returns the whole table of contents, `memory_re
 note, and `memory_write` saves one — then consolidates the store before it returns, so there is
 no queued state and no background pass.
 
+A rewrite changes only the fields the caller passes: `name`, `description` and `type` keep their
+current values when omitted, so fixing a typo in the body cannot move a note to another section
+of the index. A new note defaults to the filename stem, an empty description and `project`.
+
 The store lives at `~/.agents/memory` and is wired into Claude Code, opencode and DSH by
 registering the MCP server (below). It is installed once with `uv tool install`, so every agent
 calls the same `mem` on `PATH` rather than a path inside this checkout.
@@ -161,6 +165,11 @@ python3 -m unittest discover -s tests -v
   notes rather than save context.
 - **`if_version` is mandatory** on write unless `--force` is passed: a blind overwrite is
   exactly what the token exists to prevent.
+- **A rewrite keeps what it is not given.** `name`, `description` and `type` are the only
+  optional fields; omitting one leaves the file's current value in place, so a body-only fix
+  cannot move a note to another section of the index. An empty `--description` clears the
+  description; an empty `--name` keeps the current one. The store writes exactly three
+  frontmatter keys (`name`, `description`, `metadata`) and drops any other hand-written key.
 - **Schema is Claude Code's**: four types (`user`, `feedback`, `project`, `reference`), the same
   frontmatter keys. No extra fields.
 - **Concurrency rests on the version token, held under a short-lived lock.** `write` and `delete`
