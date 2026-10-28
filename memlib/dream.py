@@ -11,9 +11,9 @@ increments. The pass runs when the counter reaches `dream.every_sessions`, or
 whenever `--force` is given. Without `--all` it touches the global scope and the
 current project's scope; `--all` walks every project directory.
 
-Concurrency: one lockfile holding a pid, `.state/dream.lock`. A second pass that
-finds a live owner exits without doing anything; a lock left behind by a dead
-process is taken over.
+Concurrency: a `flock` on `.state/dream.lock`, released by the kernel when the
+process ends. A second pass exits without doing anything instead of queueing,
+and a crash cannot leave the lock held.
 
 History: when the store is a git repository (and its root is the repository
 top-level, not a directory inside another repo), the pass commits the tree
@@ -31,6 +31,7 @@ the wrong half of a pair.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import subprocess
@@ -40,7 +41,6 @@ from pathlib import Path
 
 from . import config, hooks, index, store
 
-DEFAULT_EVERY = 5
 LOCK_NAME = "dream.lock"
 LOG_NAME = "dream.log"
 GIT_TIMEOUT = 15
@@ -76,19 +76,10 @@ class Stats:
 
 def run(force: bool = False, cwd: str = ".", all_scopes: bool = False) -> int:
     settings = config.load()
-    every = _as_int(config.get("dream", "every_sessions", settings), DEFAULT_EVERY)
+    every = config.every_sessions(settings)
     sessions = hooks.session_count()
     if not force and sessions < every:
-        _emit(
-            {
-                "ok": True,
-                "ran": False,
-                "reason": "below threshold",
-                "sessions": sessions,
-                "every": every,
-            }
-        )
-        return 0
+        return _emit_noop("below threshold", sessions, every)
 
     root = config.root()
     try:
@@ -103,6 +94,12 @@ def run(force: bool = False, cwd: str = ".", all_scopes: bool = False) -> int:
     stats = Stats()
     errors: list[str] = []
     try:
+        # A pass that was waiting for the lock may have consolidated already.
+        if not force:
+            sessions = hooks.session_count()
+            if sessions < every:
+                return _emit_noop("below threshold", sessions, every)
+
         directories = _scopes(cwd, all_scopes)
         stats.scopes = len(directories)
         # Ignore rules first: the lockfile is already on disk, and the snapshot
@@ -123,6 +120,15 @@ def run(force: bool = False, cwd: str = ".", all_scopes: bool = False) -> int:
             hooks.reset_sessions()
             stats.sessions = sessions
         _append_log(root, stats)
+    except Exception as exc:  # never a traceback instead of the JSON contract
+        _emit(
+            {
+                "ok": False,
+                "error": "internal",
+                "message": "{}: {}".format(exc.__class__.__name__, exc),
+            }
+        )
+        return 1
     finally:
         _release(lock)
 
@@ -132,6 +138,19 @@ def run(force: bool = False, cwd: str = ".", all_scopes: bool = False) -> int:
         _emit(payload)
         return 1
     _emit(payload)
+    return 0
+
+
+def _emit_noop(reason: str, sessions: int, every: int) -> int:
+    _emit(
+        {
+            "ok": True,
+            "ran": False,
+            "reason": reason,
+            "sessions": sessions,
+            "every": every,
+        }
+    )
     return 0
 
 
@@ -179,10 +198,28 @@ def _replace_same_name(directory: Path, memories: list[store.Memory], stats: Sta
             continue
         group.sort(key=lambda m: (m.modified, m.filename))
         for older in group[:-1]:
-            if store.delete(directory, older.filename):
+            if _delete_unchanged(directory, older):
                 removed.add(older.filename)
                 stats.replaced += 1
     return removed
+
+
+def _delete_unchanged(directory: Path, memory: store.Memory) -> bool:
+    """Unlink only while the file still holds the bytes this pass looked at.
+
+    Dream runs detached beside agents that keep writing; deleting from the
+    list it loaded minutes ago would throw away a newer note.
+    """
+    try:
+        current = store.load(directory / memory.filename)
+    except (OSError, store.StoreError):
+        return False
+    if current.version != memory.version:
+        return False
+    try:
+        return store.delete(directory, memory.filename)
+    except store.StoreError:
+        return False
 
 
 def _merge_duplicates(directory: Path, memories: list[store.Memory], stats: Stats) -> None:
@@ -190,7 +227,8 @@ def _merge_duplicates(directory: Path, memories: list[store.Memory], stats: Stat
 
     Bodies are merged line-wise: only lines the keeper does not already have are
     appended, so a near-duplicate's extra detail survives. The keeper is written
-    before any duplicate is deleted; if that write fails, both files stay.
+    before any duplicate is deleted, and the write carries the version this pass
+    read; on a conflict both files stay for the next run.
     """
     ordered = sorted(memories, key=lambda m: (m.modified, m.filename), reverse=True)
     clusters: list[tuple[store.Memory, list[store.Memory]]] = []
@@ -227,12 +265,12 @@ def _merge_duplicates(directory: Path, memories: list[store.Memory], stats: Stat
                     name=keeper.name,
                     description=keeper.description,
                     memory_type=keeper.type,
-                    force=True,
+                    if_version=keeper.version,
                 )
             except store.StoreError:
                 continue
         for duplicate in duplicates:
-            if store.delete(directory, duplicate.filename):
+            if _delete_unchanged(directory, duplicate):
                 stats.merged += 1
 
 
@@ -240,11 +278,11 @@ def _repair_index(directory: Path) -> int:
     """Rebuild MEMORY.md and count the lines that pointed at gone files."""
     path = directory / "MEMORY.md"
     try:
-        before = path.read_text(encoding="utf-8")
+        before = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         before = ""
     index.rebuild(directory)
-    after = path.read_text(encoding="utf-8")
+    after = path.read_text(encoding="utf-8", errors="replace")
     if before == after:
         return 0
     # Only entry lines count; a changed "(N)" heading follows from them.
@@ -273,53 +311,36 @@ def _merge_body(keeper: str, other: str) -> str:
 # lock
 
 
-def _acquire(root: Path) -> Path | None:
+def _acquire(root: Path) -> tuple[Path, int] | None:
+    """Take an exclusive flock on the lockfile, or return None.
+
+    The lock is the kernel's, not a pid written into a file: it disappears when
+    the process dies for any reason, so a crash cannot wedge every later pass
+    and the file cannot be stolen between creation and its first write.
+    """
     path = root / ".state" / LOCK_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
-    for _ in range(2):
-        try:
-            handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            if _alive(_read_pid(path)):
-                return None
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-            continue
-        try:
-            os.write(handle, str(os.getpid()).encode("ascii"))
-        finally:
-            os.close(handle)
-        return path
-    return None
-
-
-def _release(path: Path) -> None:
+    handle = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        if _read_pid(path) == os.getpid():
-            path.unlink()
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(handle)
+        return None
+    try:
+        os.ftruncate(handle, 0)
+        os.write(handle, "{}\n".format(os.getpid()).encode("ascii"))
+    except OSError:
+        pass  # the pid is diagnostic only; the flock is the lock
+    return path, handle
+
+
+def _release(lock: tuple[Path, int] | None) -> None:
+    if lock is None:
+        return
+    try:
+        os.close(lock[1])  # closing the descriptor releases the flock
     except OSError:
         pass
-
-
-def _read_pid(path: Path) -> int:
-    try:
-        return int(path.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return 0
-
-
-def _alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 # --------------------------------------------------------------------------
@@ -360,7 +381,7 @@ def _ensure_gitignore(root: Path) -> None:
         return
     path = root / ".gitignore"
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         lines = []
     missing = [line for line in GITIGNORE_LINES if line not in lines]
@@ -418,13 +439,6 @@ def _append_log(root: Path, stats: Stats) -> None:
             handle.write(line)
     except OSError:
         pass
-
-
-def _as_int(value, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _emit(payload: dict) -> None:

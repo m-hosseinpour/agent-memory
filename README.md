@@ -15,11 +15,12 @@ Design and research behind it: `~/.dsh/memory-system/` (`research.md`, `design.m
 P0–P2 are implemented: the store, index, versioned writes, lexical recall, the CLI, the
 four adapters (Claude Code hooks, the MCP stdio server, the opencode V2 plugin, the DSH
 plugin), and the two background passes — `mem extract` (end-of-session extraction through a
-configurable command) and `mem dream` (session-counted consolidation, which also spawns
-itself once the session counter reaches `dream.every_sessions`).
+configurable command) and `mem dream` (session-counted consolidation, which the SessionStart
+hook spawns once the counter reaches `dream.every_sessions`).
 
-What is left is installation, not code: bootstrapping the real store and wiring the agents'
-global configuration. `HANDOFF.md` lists the exact steps.
+The store is installed on this machine (`~/.agents/memory`), wired into Claude Code and
+opencode; the DSH plugin still needs the steps in `integrations/dsh/README.md`. `HANDOFF.md`
+tracks what is left.
 
 ## Usage
 
@@ -75,14 +76,18 @@ every_sessions = 5               # session counter that triggers consolidation
 ```
 
 `mem extract` runs the command once, feeds it the new part of the transcript, and writes the
-memories it proposes. It is create-only: an existing file is skipped, never overwritten.
+memories it proposes. It is create-only: an existing file is skipped, never overwritten, and
+that check looks in the global scope too. Writes always go to the project scope — the model
+never sees note bodies, so it is not asked to guess "global"; a durable user preference is
+written there by the agent itself with `memory_write` (or `mem write --scope global`).
 The prompt asks for strict JSON, and every item still passes the normal secret scan and size
 cap. The command's working directory is the project.
 
 `mem dream` merges notes of the same type whose descriptions are near-identical, lets the
-newer of two notes with the same name replace the older, repairs `MEMORY.md`, appends a line
-to `dream.log`, and — when the store is a git repository — commits before and after the
-pass. It is deterministic (no model call) and idempotent: a second run changes nothing.
+newer of two notes with the same name *and* type replace the older, repairs `MEMORY.md`,
+records one line in `dream.log` for every run that actually consolidates, and — when the
+store is a git repository — commits before and after the pass. It is deterministic (no model
+call) and idempotent: a second run changes nothing.
 
 ## Layout
 
@@ -158,5 +163,7 @@ python3 -m unittest discover -s tests -v
   trade-off, not an oversight.
 - **Runtime state is not memory.** `.state/` and `dream.log` are ignored by the store's
   repository; only notes and `MEMORY.md` are committed.
-- **Only the standard library.** No dependency to install, no build step.
+- **Nothing to install.** The standard library only, plus two optional runtime companions:
+  `git` (for dream's commits; without it the pass still consolidates) and the `zstd` CLI
+  (only for DSH session logs on Python older than 3.14, which has `compression.zstd`).
 - When testing, set `MEM_ROOT` to a scratch directory. The default root is the real store.

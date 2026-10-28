@@ -111,7 +111,9 @@ class InitializeTests(McpTestCase):
         self.assertEqual(result["serverInfo"]["name"], "mem")
         self.assertTrue(result["serverInfo"]["version"])
         self.assertIn("memory_write", result["instructions"])
-        self.assertEqual(responses[1]["result"], {})
+        # Every result names its type for the 2026-07-28 clients; ping has no
+        # other fields.
+        self.assertEqual(responses[1]["result"], {"resultType": "complete"})
 
     def test_unknown_protocol_version_falls_back_to_the_latest_legacy_one(self):
         _, responses, stderr = self.serve(
@@ -324,7 +326,9 @@ class ReadWriteTests(McpTestCase):
         self.assertEqual(failure["error"], "invalid")
         self.assertIn("empty", failure["message"])
         # A rejected document never takes the server down.
-        self.assertEqual(responses[1]["result"], {})
+        # Every result names its type for the 2026-07-28 clients; ping has no
+        # other fields.
+        self.assertEqual(responses[1]["result"], {"resultType": "complete"})
 
     def test_read_of_a_missing_memory_is_a_tool_error(self):
         _, responses, _ = self.serve(
@@ -341,7 +345,9 @@ class ReadWriteTests(McpTestCase):
         self.assertEqual(failure["error"], "invalid")
         self.assertIn("no such memory", failure["message"])
         # The server keeps serving after a failed tool call.
-        self.assertEqual(responses[1]["result"], {})
+        # Every result names its type for the 2026-07-28 clients; ping has no
+        # other fields.
+        self.assertEqual(responses[1]["result"], {"resultType": "complete"})
 
     def test_global_store_is_separate_from_project(self):
         _, responses, _ = self.serve(
@@ -455,7 +461,9 @@ class ProtocolTests(McpTestCase):
         self.assertEqual(responses[0]["error"]["code"], mcp.PARSE_ERROR)
         self.assertIsNone(responses[0]["id"])
         self.assertEqual(responses[1]["id"], 2)
-        self.assertEqual(responses[1]["result"], {})
+        # Every result names its type for the 2026-07-28 clients; ping has no
+        # other fields.
+        self.assertEqual(responses[1]["result"], {"resultType": "complete"})
 
     def test_invalid_requests_are_invalid_request(self):
         _, responses, _ = self.serve(
@@ -644,6 +652,24 @@ class DiscoveryTests(McpTestCase):
             {"memory_read", "memory_write", "memory_search"},
         )
         self.assertFalse(responses[2]["result"]["isError"])
+
+    def test_list_results_carry_the_modern_cache_and_type_fields(self):
+        """A 2026-07-28 client rejects a result without these (verified against
+        Claude Code 2.1.301, which named the missing field)."""
+        code, responses, _ = self.serve(
+            [
+                {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {}},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            ]
+        )
+        self.assertEqual(code, 0)
+        discover, listing = responses[0]["result"], responses[1]["result"]
+        for result in (discover, listing):
+            self.assertEqual(result["resultType"], "complete")
+            self.assertIsInstance(result["ttlMs"], int)
+            self.assertIn(result["cacheScope"], ("public", "private"))
+        self.assertEqual(discover["ttlMs"], 0)
+        self.assertEqual(listing["ttlMs"], 0)
 
     def test_initialize_still_answers_a_modern_version(self):
         code, responses, err = self.serve(

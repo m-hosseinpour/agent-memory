@@ -71,6 +71,18 @@ def get(section: str, key: str, settings: dict | None = None) -> object:
     return data.get(section, {}).get(key, DEFAULTS.get(section, {}).get(key))
 
 
+def every_sessions(settings: dict | None = None) -> int:
+    """Sessions between consolidations.
+
+    Both the hook that spawns `mem dream` and the pass itself ask here, so the
+    trigger and the gate can never disagree about the threshold.
+    """
+    try:
+        return int(get("dream", "every_sessions", settings))
+    except (TypeError, ValueError):
+        return int(DEFAULTS["dream"]["every_sessions"])
+
+
 def scope_dir(scope: str, cwd: str) -> Path:
     """Directory for a scope: `global`, or `project` for the given directory."""
     from .store import slug_for

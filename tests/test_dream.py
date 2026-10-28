@@ -7,6 +7,7 @@ turn on and the wall clock is not a usable input for that.
 
 from __future__ import annotations
 
+import fcntl
 import io
 import json
 import os
@@ -18,7 +19,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from memlib import config, dream, hooks, index, store
+from memlib import cli, config, dream, hooks, index, store
 
 GIT = shutil.which("git")
 OLD = "2026-10-01T00:00:00.000Z"
@@ -123,35 +124,53 @@ class GateTests(DreamTestCase):
 
 
 class LockTests(DreamTestCase):
-    def lock(self, contents):
+    def lock(self, contents=None):
         path = self.root / ".state" / dream.LOCK_NAME
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(contents, encoding="utf-8")
+        if contents is not None:
+            path.write_text(contents, encoding="utf-8")
         return path
 
-    def test_live_lock_blocks_the_run(self):
+    def hold_lock(self):
+        """Hold the flock the way a running pass does."""
+        handle = os.open(self.lock(), os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.addCleanup(os.close, handle)
+
+    def lock_is_free(self):
+        handle = os.open(self.lock(), os.O_RDWR)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(handle)
+
+    def test_a_held_lock_blocks_the_run(self):
         self.bump(3)
-        self.lock(str(os.getpid()))
+        self.hold_lock()
         code, out = self.run_dream(force=True)
         self.assertEqual(code, 0)
         self.assertFalse(out["ran"])
         self.assertEqual(out["reason"], "locked")
         self.assertEqual(hooks.session_count(), 3)
 
-    def test_stale_lock_is_taken_over(self):
-        self.lock("0")
+    def test_a_leftover_lock_file_does_not_block(self):
+        # A crash leaves the file behind; only the flock means "running".
+        self.lock(str(os.getpid()))
         code, out = self.run_dream(force=True)
-        self.assertTrue(out["ran"])
-        self.assertFalse((self.root / ".state" / dream.LOCK_NAME).exists())
-
-    def test_unreadable_lock_is_treated_as_stale(self):
-        self.lock("not-a-pid")
-        _, out = self.run_dream(force=True)
+        self.assertEqual(code, 0)
         self.assertTrue(out["ran"])
 
-    def test_lock_is_released_after_a_run(self):
+    def test_lock_is_free_after_a_run(self):
         self.run_dream(force=True)
-        self.assertFalse((self.root / ".state" / dream.LOCK_NAME).exists())
+        self.lock_is_free()
+
+    def test_lock_is_released_when_the_pass_fails(self):
+        with mock.patch("memlib.dream._consolidate", side_effect=RuntimeError("boom")):
+            code, out = self.run_dream(force=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(out["error"], "internal")
+        self.assertIn("boom", out["message"])
+        self.lock_is_free()
 
 
 class ConsolidationTests(DreamTestCase):
@@ -197,6 +216,64 @@ class ConsolidationTests(DreamTestCase):
         self.assertIn("shared line", keeper.body)
         self.assertIn("OLD-ONLY-LINE", keeper.body)
         self.assertEqual(keeper.description, "the lockfile is pnpm; npm install breaks the CI")
+
+    def test_a_concurrent_edit_to_the_keeper_is_neither_lost_nor_merged_over(self):
+        self.put(
+            "project",
+            "old.md",
+            "pnpm-notes",
+            "the lockfile is pnpm; npm install breaks CI",
+            "shared line\nOLD-ONLY-LINE",
+            modified=OLD,
+        )
+        self.put(
+            "project",
+            "new.md",
+            "pnpm-rule",
+            "the lockfile is pnpm; npm install breaks the CI",
+            "shared line",
+            modified=NEW,
+        )
+        directory = self.directory()
+        snapshot = store.list_memories(directory)
+        keeper = store.load(directory / "new.md")
+        # Another agent rewrites the keeper between the scan and the merge.
+        store.write(
+            directory,
+            "new.md",
+            "CONCURRENT-EDIT",
+            name=keeper.name,
+            description=keeper.description,
+            if_version=keeper.version,
+        )
+
+        stats = dream.Stats()
+        dream._merge_duplicates(directory, snapshot, stats)
+
+        self.assertEqual(stats.merged, 0)
+        self.assertIn("CONCURRENT-EDIT", (directory / "new.md").read_text())
+        self.assertTrue((directory / "old.md").exists(), "nothing may be deleted on a conflict")
+
+    def test_a_concurrent_edit_to_the_replaced_note_is_not_deleted(self):
+        self.put("project", "old.md", "pnpm", "use pnpm", "OLD-BODY", modified=OLD)
+        self.put("project", "new.md", "pnpm", "use pnpm", "NEW-BODY", modified=NEW)
+        directory = self.directory()
+        snapshot = store.list_memories(directory)
+        older = store.load(directory / "old.md")
+        store.write(
+            directory,
+            "old.md",
+            "CONCURRENT-EDIT",
+            name=older.name,
+            description=older.description,
+            if_version=older.version,
+        )
+
+        stats = dream.Stats()
+        dream._replace_same_name(directory, snapshot, stats)
+
+        self.assertEqual(stats.replaced, 0)
+        self.assertIn("CONCURRENT-EDIT", (directory / "old.md").read_text())
 
     def test_unrelated_descriptions_are_kept(self):
         self.put("project", "a.md", "pnpm", "the lockfile is pnpm", "A", modified=OLD)
@@ -392,6 +469,15 @@ class HookTriggerTests(DreamTestCase):
         with mock.patch("memlib.hooks.subprocess.Popen") as popen:
             self.hook()
         popen.assert_not_called()
+
+    def test_the_spawned_argv_is_one_the_cli_accepts(self):
+        self.bump(4)
+        with mock.patch("memlib.hooks.subprocess.Popen") as popen:
+            self.hook()
+        argv = popen.call_args[0][0]
+        parsed = cli.build_parser().parse_args(argv[1:])
+        self.assertEqual(parsed.command, "dream")
+        self.assertEqual(parsed.cwd, str(self.cwd))
 
     def test_a_spawn_failure_does_not_break_the_hook(self):
         self.bump(4)

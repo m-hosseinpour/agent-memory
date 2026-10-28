@@ -552,6 +552,11 @@ class _Server:
                 request_id, INTERNAL_ERROR, f"internal error while handling {method}"
             )
             return
+        # The 2026-07-28 revision requires every result to name its result type;
+        # a client on that revision rejects ours outright without it, while the
+        # handshake revisions ignore the unknown field.
+        result = dict(result)
+        result["resultType"] = "complete"
         self._write({"jsonrpc": "2.0", "id": request_id, "result": result})
 
     def _dispatch(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -560,7 +565,10 @@ class _Server:
         if method == "ping":
             return {}
         if method == "tools/list":
-            return {"tools": TOOLS}
+            # The 2026-07-28 revision makes the cache hints mandatory on list
+            # results; the tool list never changes, but the next session may run
+            # a newer binary, so it is not cached.
+            return {"tools": TOOLS, "ttlMs": 0, "cacheScope": "private"}
         if method == "tools/call":
             return self._tools_call(params)
         if method == "server/discover":
@@ -603,6 +611,7 @@ class _Server:
             "capabilities": {"tools": {"listChanged": False}},
             "instructions": INSTRUCTIONS,
             "ttlMs": 0,
+            "cacheScope": "private",
         }
 
     def _tools_call(self, params: dict[str, Any]) -> dict[str, Any]:

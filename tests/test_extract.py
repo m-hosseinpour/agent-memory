@@ -385,6 +385,15 @@ class SqliteReaderTests(ExtractTestCase):
         self.assertEqual((code, data["reason"]), (0, "nothing new"))
         self.assertEqual(self.calls(), 0)
 
+    def test_a_path_with_uri_characters_is_still_opened(self):
+        # A hand-built file: URI would read the wrong file here; as_uri escapes.
+        self.write_config()
+        self.set_response({"memories": []})
+        weird = self.sqlite_transcript().rename(self.root / "weird?name#x.db")
+        code, data = self.output(*self.extract(weird, agent="opencode", session="s1"))
+        self.assertEqual((code, data["reason"]), (0, "ok"))
+        self.assertIn("SQLITE-USER-MARKER", self.prompt())
+
 
 class ResolutionTests(ExtractTestCase):
     def test_dsh_accepts_both_session_directory_shapes(self):
@@ -500,6 +509,34 @@ class WritingTests(ExtractTestCase):
         self.assertEqual(data["written"], ["fresh-note.md"])
         self.assertEqual(data["skipped"], 1)
         self.assertEqual((self.project_dir / "already-here.md").read_text().count("old body"), 1)
+
+    def test_a_name_that_exists_in_global_is_not_duplicated_in_the_project(self):
+        self.write_config()
+        store.write(
+            config.scope_dir("global", str(self.cwd)),
+            "reply-short.md",
+            "the original body",
+            name="reply-short",
+            description="user wants short answers",
+            if_version="new",
+        )
+        self.set_response(
+            {
+                "memories": [
+                    {
+                        "name": "reply-short",
+                        "description": "user wants short answers",
+                        "type": "user",
+                        "content": "a second copy of a global note",
+                    }
+                ]
+            }
+        )
+        code, data = self.output(*self.extract(self.claude_transcript()))
+        self.assertEqual(code, 0)
+        self.assertEqual(data["written"], [])
+        self.assertEqual(data["skipped"], 1)
+        self.assertFalse((self.project_dir / "reply-short.md").exists())
 
     def test_secret_is_refused_and_the_rest_still_write(self):
         self.write_config()

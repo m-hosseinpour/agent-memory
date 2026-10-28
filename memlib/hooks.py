@@ -172,7 +172,7 @@ def _session_start(payload: dict, out_stream) -> None:
     except Exception as exc:
         # The index still gets injected when only the state write fails.
         _log("session-start: state not updated: {}: {}".format(exc.__class__.__name__, exc))
-    if count is not None and count >= _dream_threshold():
+    if count is not None and count >= config.every_sessions():
         try:
             _spawn_dream(_cwd(payload))
         except Exception as exc:
@@ -180,13 +180,6 @@ def _session_start(payload: dict, out_stream) -> None:
     text = _index_context(_cwd(payload))
     if text:
         _emit(out_stream, "session-start", text)
-
-
-def _dream_threshold() -> int:
-    """Sessions between consolidations; zero or less means every session."""
-    settings = config.load()
-    default = config.DEFAULTS["dream"]["every_sessions"]
-    return _as_int(config.get("dream", "every_sessions", settings), default)
 
 
 def _user_prompt(payload: dict, out_stream) -> None:

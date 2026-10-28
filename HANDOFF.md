@@ -3,11 +3,9 @@
 Started from the research + design, then P0, P1 and P2. A fresh session should be able to
 start here with no other context.
 
-> **Work in progress (paused 2026-10-28).** The P2 change set is complete and green
-> (`python3 -m unittest discover -s tests` → 168 tests, OK) but it is **staged, not
-> committed**. The independent review was started and interrupted; the install step in
-> "What is next" has **not** been applied. Resume with: finish the review (or re-run it),
-> commit, then the install.
+P2 was committed as `0b83b0d`, independently reviewed, and the review's findings were fixed
+in a follow-up commit (see "Review of P2 and what changed"). The store is installed and
+wired into Claude Code and opencode; the DSH plugin install is the one remaining step.
 
 ## Read these first
 
@@ -108,8 +106,9 @@ modify the four P0 modules without saying so.
 `python3 -m unittest discover -s tests` runs 168 tests, all passing.
 
 - **`memlib/dream.py`** — `mem dream`: session-counter gate (`dream.every_sessions`;
-  `--force` bypasses it), pid lockfile (`.state/dream.lock`; a lock left by a dead process is
-  taken over), same-name+type replacement (newer `modified` wins, bodies are *not* merged),
+  `--force` bypasses it), a `flock` on `.state/dream.lock` (released by the kernel, so a crash
+  cannot wedge later passes), same-name+type replacement (newer `modified` wins, bodies are
+  *not* merged),
   near-duplicate merging (same type, description word overlap ≥ 0.8, unique lines of the
   older body appended to the newest), `MEMORY.md` repair, one line per run in `dream.log`,
   and git commits before/after when the store root is its own repository (`.state/` and
@@ -135,19 +134,64 @@ modify the four P0 modules without saying so.
 Note on P0/P1 docs above: the "expected ImportError" comment and the P1 test count describe
 the tree as it was then. The suite is 168 tests now.
 
-## What is next
+## Install state (2026-10-28)
 
-1. **Install** — the only thing left before daily use. Create the store
-   (`mkdir -p ~/.agents/memory && git -C ~/.agents/memory init`), copy `PROTOCOL.md` into it,
-   merge the `install/*.json` fragments into the four agents, append `install/agents-md.md` to
-   `~/.agents/AGENTS.md`, and set `"autoMemoryEnabled": false` in `~/.claude/settings.json`.
-   README's "Install" section has the numbered version.
-2. **Choose the extraction model** — still the open decision from the design.
-   `extract.command` is the whole switch (e.g. `claude -p`); keep `enabled = false` until it
-   is chosen, then sample a few real sessions for noise. If it is noisy, leave it off: the
-   system works without extraction.
-3. Optional, later: `mem eval` / `mem stats` (deliberately out of v1), and note-body search
-  (recall is description-only today).
+Done, on this machine:
+
+- `~/.agents/memory` exists with `git init`, `PROTOCOL.md`, `config.toml` (extraction off)
+  and an empty `global/MEMORY.md`; bootstrap commit `0481121`.
+- `~/.agents/AGENTS.md` carries the "Shared memory" block from `install/agents-md.md`
+  (Claude Code imports that file; opencode lists it in `instructions`).
+- `~/.claude/settings.json`: `autoMemoryEnabled: false`, plus `SessionStart`,
+  `UserPromptSubmit`, `Stop` and `SessionEnd` hooks. Existing hooks were appended to, not
+  replaced. Backups: `*.bak-20261028-123916`.
+- Claude Code user-scope MCP server `mem` (`claude mcp add-json ... --scope user`), reported
+  `✔ Connected`.
+- `~/.config/opencode/opencode.json`: `instructions` gained
+  `~/.agents/memory/global/MEMORY.md`; `mcp.servers.mem` added next to searxng/playwright.
+- Extraction is **off** (`enabled = false`), as decided.
+
+Still to do:
+
+1. **DSH plugin** — follow `integrations/dsh/README.md`: symlink `integrations/dsh` to
+   `~/.dsh/plugins/memory`, `dsh plugin --profile web add link:...`, add `dsh-memory` to
+   `dsh.profile.bundles` in `~/.dsh/profiles/web/package.json`, then restart DSH. Not done
+   because it changes the live harness and needs a restart.
+2. **Choose the extraction model** — still the open design decision. `extract.command` is the
+   whole switch (e.g. `claude -p`); keep it off until chosen, then sample real sessions for
+   noise.
+3. Optional, later: `mem eval` / `mem stats`, note-body search (recall is description-only).
+
+## Review of P2 and what changed
+
+An independent review of `0b83b0d` found, and the follow-up commit fixes:
+
+- **Dream overwrote the keeper with `force=True`** and deleted from a stale snapshot, so a
+  concurrent agent edit could be lost. Now the keeper write carries `if_version`, and every
+  delete re-loads the file first (`_delete_unchanged`); on a conflict nothing is deleted.
+  Regression tests: `test_a_concurrent_edit_to_the_keeper_*`, `..._replaced_note_*`.
+- **The pid lockfile raced** (empty file window) and could wedge on pid reuse. It is now a
+  `flock` on `.state/dream.lock`; the pid is diagnostic only, and the counter is re-checked
+  after the lock is taken. The lock file is left in place — unlinking it is its own race.
+- **No catch-all in `dream.run`**, so an OSError from `reset_sessions` printed a traceback
+  instead of the JSON contract. Now `except Exception` → `{"ok": false, "error": "internal"}`,
+  and the user-editable reads use `errors="replace"`.
+- **Extraction deduped only in the project scope** while its prompt lists global notes, so a
+  global name could reappear as a project duplicate. The exists-check now looks in both
+  scopes. Still project-only writes, deliberately (see README).
+- **SQLite transcript URI** was string-interpolated and broke on `?`/`#` in the path; now
+  `Path.as_uri()`.
+- **`every_sessions` had two implementations** (hook vs pass); both call
+  `config.every_sessions()` now.
+- README/PROTOCOL claims corrected (dream is spawned by the hook; `dream.log` only on runs
+  that consolidate; same name *and* type; no-delete via MCP; runtime deps).
+
+**Found by install verification, not by the tests:** the MCP server answered `tools/list`
+without `resultType` and without the `ttlMs`/`cacheScope` cache hints, so a 2026-07-28 client
+(Claude Code 2.1.301) rejected the tool list and the server showed "Connected · tools fetch
+failed". Every result now carries `resultType: "complete"`, `tools/list` and
+`server/discover` carry `ttlMs`/`cacheScope`, and `tests/test_mcp.py` pins the shape. This is
+worth re-checking with `claude mcp list` after any MCP change.
 
 ## Decisions made in P2 (do not undo without a reason)
 

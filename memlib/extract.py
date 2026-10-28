@@ -139,8 +139,13 @@ def _run_enabled(
     prompt = _build_prompt(project_cwd, rendered)
     proposals = _parse_output(_run_command(command, prompt, project_cwd))
 
+    # Extraction writes to the project scope only; the model never sees bodies,
+    # so letting it guess "global" would put guesses into every project. A name
+    # that already exists in either scope is skipped, so a global preference
+    # cannot reappear as a project duplicate.
     directory = config.scope_dir("project", project_cwd)
-    written, skipped, refused = _write_memories(proposals, directory, session)
+    known = (directory, config.scope_dir("global", project_cwd))
+    written, skipped, refused = _write_memories(proposals, directory, session, known)
     if written:
         index.rebuild(directory)
     if new_pos != previous:
@@ -413,7 +418,7 @@ def _block_text(content) -> str:
 def _sqlite_turns(path: Path, session: str, after: int) -> tuple[list[tuple[str, str]], int]:
     """Read rows newer than `after` for one session; soft-fail on a bad schema."""
     try:
-        connection = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
+        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error as exc:
         _log("cannot open sqlite transcript: {}".format(exc))
         return [], after
@@ -593,7 +598,7 @@ def _strip_fences(text: str) -> str:
 
 
 def _write_memories(
-    proposals: list, directory: Path, session: str
+    proposals: list, directory: Path, session: str, known: tuple[Path, ...]
 ) -> tuple[list[str], int, int]:
     written: list[str] = []
     skipped = max(0, len(proposals) - MAX_MEMORIES)
@@ -619,8 +624,9 @@ def _write_memories(
 
         filename = "{}.md".format(name)
         # Extraction is create-only: the model has not read existing bodies, so
-        # a rewrite would blindly discard whatever a human or dream added.
-        if (directory / filename).exists():
+        # a rewrite would blindly discard whatever a human or dream added. The
+        # name is checked in both scopes because the prompt lists both.
+        if any((scope / filename).exists() for scope in known):
             skipped += 1
             continue
 
