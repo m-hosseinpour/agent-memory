@@ -43,11 +43,44 @@ mem index  --cwd "$PWD"                 # the table of contents, both scopes
 mem forget --scope project --cwd "$PWD" --path pnpm-not-npm.md
 mem dream  --cwd "$PWD"                 # a manual consolidation pass
 mem dream  --all                        # every project scope
+mem migrate --dry-run                   # Claude Code notes: preview, write nothing
 mem mcp                                 # the MCP server on stdio
 ```
 
 Exit codes: `0` ok, `1` invalid input, `2` version conflict (the current content is returned so
-the caller can merge), `3` content looked like a secret and was refused.
+the caller can merge), `3` content looked like a secret and was refused. `migrate` uses the same
+codes for a batch: `3` if any note was refused, `1` if any note was invalid or collided with a
+different existing note, `0` otherwise.
+
+## Migrating from Claude Code
+
+Claude Code keeps auto memory per project under
+`${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<slug>/memory/`, in the note format this store reads.
+`mem migrate` copies the notes in, skips the generated `MEMORY.md`, and lets this store rebuild
+the index:
+
+```bash
+mem migrate --dry-run                  # the plan, no writes
+mem migrate                            # every project, into projects/<slug>
+mem migrate --global user,feedback     # promote those types to global/
+mem migrate --cwd /path/to/project     # one project (e.g. a custom autoMemoryDirectory)
+```
+
+Claude Code's directory name cannot be decoded back to a path — it turns every non-alphanumeric
+into `-`, so a dot is lost — so the importer reads the real cwd from the project's session logs
+and builds the scope with the store's own slug. A project whose cwd cannot be recovered is
+reported and skipped rather than written where no `mem` command would read it; `--cwd` resolves
+a project from the cwd you already know.
+
+Notes stay in their own project scope by default: one may say `type: feedback` and still be
+about a single repository, and Claude Code kept it under one project. Each note goes through the
+store's write path, so the filename rules, the size cap, the empty-body check and the secret
+refusal apply, and `--dry-run` runs the same checks without writing. An existing file is never
+overwritten: an identical note is `exists`, a different one is a `collision` (exit 1), and a
+note the store already has under another filename — same type and name, or the same description
+by the consolidation rule — is `exists` too, so a rerun cannot overturn what the first pass
+kept. Consolidation then runs once per touched scope; `replaced` and `merged` say what the pass
+deleted, and a migrated note it removed is reported as `removed`.
 
 ## MCP
 
@@ -156,6 +189,7 @@ memlib/store.py      files, frontmatter, version tokens, conflicts, secret refus
 memlib/index.py      MEMORY.md generation (atomic, no line budget)
 memlib/dream.py      consolidation, called after every change and by `mem dream`
 memlib/mcp.py        MCP stdio server: memory_index / memory_read / memory_write
+memlib/migrate.py    import Claude Code's per-project notes and rebuild the index
 memlib/cli.py        argparse surface
 PROTOCOL.md          the agent-facing contract, copied into the store root
 docs/                research.md, design.md, roadmap.md, operations.md

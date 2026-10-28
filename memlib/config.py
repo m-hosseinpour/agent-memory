@@ -20,13 +20,26 @@ def root() -> Path:
     return Path(os.path.expanduser(DEFAULT_ROOT))
 
 
+def global_dir() -> Path:
+    return root() / "global"
+
+
+def project_dir(slug: str) -> Path:
+    """Directory for a project scope, from a slug already built by `slug_for`.
+
+    An importer must pass `slug_for(real_cwd)`, not a directory name copied
+    from another tool: Claude Code's names are lossy and would not match the
+    scope `mem --cwd` reads.
+    """
+    return root() / "projects" / slug
+
+
 def scope_dir(scope: str, cwd: str) -> Path:
     """Directory for a scope: `global`, or `project` for the given directory."""
     from .store import slug_for
 
-    base = root()
     if scope == "global":
-        return base / "global"
+        return global_dir()
     if scope == "project":
-        return base / "projects" / slug_for(cwd)
+        return project_dir(slug_for(cwd))
     raise ValueError(f"unknown scope {scope!r}; expected 'global' or 'project'")

@@ -18,6 +18,23 @@
   نام فایل تخت و با پسوند `.md`؛ `MEMORY.md` نام مجاز نیست و `mem read` هم آن را نمی‌خواند
   (`mem index` جای آن است).
 
+## مهاجرت از Claude Code
+
+```bash
+./bin/mem migrate --dry-run                 # پیش‌نمایش، بدون نوشتن
+./bin/mem migrate                           # همهٔ پروژه‌ها، هرکدام در scope خودش
+./bin/mem migrate --global user,feedback    # انتقال نوع‌های عمومی به global/
+./bin/mem migrate --cwd "$PWD" --from /path/to/memory   # autoMemoryDirectory سفارشی
+```
+
+منبع پیش‌فرض `${CLAUDE_CONFIG_DIR:-~/.claude}/projects` است. `MEMORY.md` منبع کپی نمی‌شود
+(تولیدشده است) و هر یادداشت از `store.write` رد می‌شود. scope از cwd واقعیِ ثبت‌شده در لاگ
+سشن ساخته می‌شود، نه از نام پوشهٔ Claude Code (آن نام نقطه را به `-` تبدیل می‌کند و
+برگشت‌پذیر نیست). فایل موجود بازنویسی نمی‌شود: یادداشت یکسان `exists` و متفاوت `collision`
+است؛ یادداشتی که تثبیت قبلی زیر نام دیگری نگه داشته هم `exists` می‌شود، پس اجرای دوباره
+انبار را تغییر نمی‌دهد. خروجی، فایل‌های ردشده (`refused`/`invalid`/`collision`) را تک‌به‌تک
+نشان می‌دهد و تثبیت یک‌بار در پایان هر scope اجرا می‌شود.
+
 ## ورودی‌ها
 
 | ورودی | اثر |

@@ -11,6 +11,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -337,6 +338,278 @@ class IndexTests(CliTestCase):
         for word in words:
             self.assertIn(f"note-{word}.md", text)
         self.assertNotIn("truncated", text)
+
+
+class MigrateTests(CliTestCase):
+    """`mem migrate` imports Claude Code's per-project memory notes."""
+
+    def claude_projects(self):
+        return self.root / "claude" / "projects"
+
+    @staticmethod
+    def claude_slug(cwd):
+        # Claude Code's directory name, not the store's: every non-alphanumeric
+        # becomes "-", so a dot is lost and cannot be decoded back.
+        return re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+
+    def memory_dir(self, cwd=None):
+        cwd = Path(cwd) if cwd is not None else self.cwd
+        project = self.claude_projects() / self.claude_slug(cwd)
+        memory = project / "memory"
+        memory.mkdir(parents=True, exist_ok=True)
+        (project / "session.jsonl").write_text(
+            json.dumps({"type": "summary", "cwd": str(cwd)}) + "\n", encoding="utf-8"
+        )
+        return memory
+
+    def note(self, memory, filename="note.md", *, name=None, description="a description",
+             body="body", type_="project"):
+        name = name or filename[:-3]
+        text = (
+            "---\n"
+            f"name: {name}\n"
+            f"description: {json.dumps(description)}\n"
+            "metadata:\n"
+            "  node_type: memory\n"
+            f"  type: {type_}\n"
+            "  originSessionId: 507e6cf4-4818-4f6e-83ad-66883efd3283\n"
+            "---\n\n"
+            f"{body}\n"
+        )
+        path = memory / filename
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def migrate(self, *args):
+        return self.json_cli("migrate", "--from", str(self.claude_projects()), *args)
+
+    def test_notes_land_in_the_matching_project_scope(self):
+        memory = self.memory_dir()
+        self.note(memory, "pnpm-not-npm.md", body="The lockfile is pnpm.")
+        # The source index is Claude Code's; the store generates its own.
+        (memory / "MEMORY.md").write_text("- [Pnpm](pnpm-not-npm.md) — stale\n", encoding="utf-8")
+
+        code, report = self.migrate()
+
+        self.assertEqual(code, 0)
+        self.assertEqual((report["projects"], report["written"]), (1, 1))
+        loaded = store.load(self.project_dir() / "pnpm-not-npm.md")
+        self.assertEqual(
+            (loaded.name, loaded.description, loaded.type, loaded.body),
+            ("pnpm-not-npm", "a description", "project", "The lockfile is pnpm."),
+        )
+        self.assertNotIn("originSessionId", loaded.meta.get("metadata", {}))
+        index_text = (self.project_dir() / "MEMORY.md").read_text(encoding="utf-8")
+        self.assertIn("pnpm-not-npm.md", index_text)
+        self.assertNotIn("stale", index_text)
+
+    def test_global_promotes_only_the_listed_types(self):
+        memory = self.memory_dir()
+        self.note(memory, "style.md", name="style", type_="user")
+        self.note(memory, "repo.md", name="repo", type_="project")
+
+        code, report = self.migrate("--global", "user")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(report["written"], 2)
+        global_dir = config.scope_dir("global", str(self.cwd))
+        self.assertTrue((global_dir / "style.md").is_file())
+        self.assertFalse((self.project_dir() / "style.md").exists())
+        self.assertTrue((self.project_dir() / "repo.md").is_file())
+
+    def test_an_identical_note_is_not_written_again(self):
+        memory = self.memory_dir()
+        self.note(memory, "a.md", body="first body")
+        self.migrate()
+
+        code, report = self.migrate()
+
+        self.assertEqual(code, 0)
+        self.assertEqual((report["written"], report["exists"]), (0, 1))
+        self.assertEqual(report["removed"], 0)
+
+    def test_a_changed_source_note_is_a_collision(self):
+        memory = self.memory_dir()
+        self.note(memory, "a.md", body="first body")
+        self.migrate()
+        self.note(memory, "a.md", body="changed in Claude Code")
+
+        code, report = self.migrate()
+
+        self.assertEqual((code, report["collision"]), (1, 1))
+        self.assertEqual(store.load(self.project_dir() / "a.md").body, "first body")
+
+    def test_dry_run_reports_without_writing(self):
+        self.note(self.memory_dir(), "a.md")
+
+        code, report = self.migrate("--dry-run")
+
+        self.assertEqual(code, 0)
+        self.assertTrue(report["dry_run"])
+        self.assertEqual(report["would_write"], 1)
+        self.assertFalse(self.project_dir().exists())
+
+    def test_a_secret_is_refused_per_note(self):
+        memory = self.memory_dir()
+        self.note(memory, "fine.md", body="nothing sensitive")
+        self.note(memory, "bad.md", body="token: sk-" + "a" * 24)
+
+        code, report = self.migrate()
+
+        self.assertEqual((code, report["written"], report["refused"]), (3, 1, 1))
+        self.assertFalse((self.project_dir() / "bad.md").exists())
+
+    def test_an_unknown_type_is_reported_not_misplaced(self):
+        self.note(self.memory_dir(), "odd.md", type_="made-up")
+
+        code, report = self.migrate()
+
+        self.assertEqual((code, report["invalid"]), (1, 1))
+        self.assertFalse(self.project_dir().exists())
+
+    def test_a_memory_directory_without_cwd_is_an_error(self):
+        memory = self.memory_dir()
+        self.note(memory, "a.md")
+
+        code, report = self.json_cli("migrate", "--from", str(memory))
+
+        self.assertEqual((code, report["error"]), (1, "invalid"))
+
+    def test_from_may_be_one_memory_directory_with_cwd(self):
+        memory = self.memory_dir()
+        self.note(memory, "a.md")
+        code, report = self.json_cli(
+            "migrate", "--from", str(memory), "--cwd", str(self.cwd)
+        )
+        self.assertEqual((code, report["written"]), (0, 1))
+        self.assertTrue((self.project_dir() / "a.md").is_file())
+
+    def test_default_source_honors_claude_config_dir(self):
+        self.note(self.memory_dir(), "a.md")
+        with mock.patch.dict(
+            os.environ, {"CLAUDE_CONFIG_DIR": str(self.root / "claude")}
+        ):
+            code, report = self.json_cli("migrate")
+        self.assertEqual((code, report["written"]), (0, 1))
+
+    def test_an_unknown_global_type_is_invalid(self):
+        code, report = self.migrate("--global", "made-up")
+        self.assertEqual((code, report["error"]), (1, "invalid"))
+
+    def test_a_second_note_with_the_same_name_is_not_written(self):
+        memory = self.memory_dir()
+        self.note(memory, "a.md", name="shared")
+        self.note(memory, "z.md", name="shared")
+
+        code, report = self.migrate()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            (report["written"], report["exists"], report["replaced"]), (1, 1, 0)
+        )
+        self.assertTrue((self.project_dir() / "a.md").is_file())
+        self.assertFalse((self.project_dir() / "z.md").exists())
+
+    def test_a_second_note_with_a_duplicate_description_is_not_written(self):
+        memory = self.memory_dir()
+        self.note(memory, "a.md", name="a-note", description="the lockfile is pnpm")
+        self.note(memory, "z.md", name="z-note", description="the lockfile is pnpm")
+
+        code, report = self.migrate()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            (report["written"], report["exists"], report["merged"]), (1, 1, 0)
+        )
+        self.assertFalse((self.project_dir() / "z.md").exists())
+
+    def test_a_rerun_does_not_reimport_a_note_the_first_run_skipped(self):
+        memory = self.memory_dir()
+        self.note(memory, "a.md", name="shared", body="a body")
+        self.note(memory, "z.md", name="shared", body="z body")
+
+        first_code, first = self.migrate()
+        before = {p.name for p in self.project_dir().glob("*.md")}
+        second_code, second = self.migrate()
+        after = {p.name for p in self.project_dir().glob("*.md")}
+
+        self.assertEqual((first_code, second_code), (0, 0))
+        self.assertEqual(first["written"], 1)
+        self.assertEqual((second["written"], second["exists"]), (0, 2))
+        self.assertEqual(before, after)
+        self.assertEqual(store.load(self.project_dir() / "a.md").body, "a body")
+
+    def test_a_dotted_cwd_uses_the_store_slug_not_claudes(self):
+        dotted = self.root / "my.project"
+        dotted.mkdir()
+        memory = self.memory_dir(dotted)
+        self.note(memory, "a.md")
+
+        code, report = self.migrate()
+
+        self.assertEqual(code, 0)
+        self.assertTrue((config.scope_dir("project", str(dotted)) / "a.md").is_file())
+        # Claude Code's own directory name would be "...-my-project"; a note
+        # there would never be read by `mem --cwd /.../my.project`.
+        self.assertFalse(
+            (config.root() / "projects" / self.claude_slug(dotted) / "a.md").exists()
+        )
+
+    def test_cwd_finds_the_project_through_its_recorded_cwd(self):
+        dotted = self.root / "my.project"
+        dotted.mkdir()
+        memory = self.memory_dir(dotted)
+        self.note(memory, "a.md")
+
+        code, report = self.json_cli(
+            "migrate",
+            "--from",
+            str(self.claude_projects()),
+            "--cwd",
+            str(dotted),
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(report["written"], 1)
+        self.assertTrue((config.scope_dir("project", str(dotted)) / "a.md").is_file())
+
+    def test_a_project_without_a_recorded_cwd_is_invalid(self):
+        memory = self.memory_dir()
+        self.note(memory, "a.md")
+        (memory.parent / "session.jsonl").unlink()
+
+        code, report = self.migrate()
+
+        self.assertEqual((code, report["invalid"]), (1, 1))
+        self.assertEqual(report["written"], 0)
+        self.assertFalse(self.project_dir().exists())
+
+    def test_cwd_falls_back_to_claudes_directory_name(self):
+        dotted = self.root / "my.project"
+        dotted.mkdir()
+        memory = self.memory_dir(dotted)
+        self.note(memory, "a.md")
+        (memory.parent / "session.jsonl").unlink()
+
+        code, report = self.json_cli(
+            "migrate",
+            "--from",
+            str(self.claude_projects()),
+            "--cwd",
+            str(dotted),
+        )
+
+        self.assertEqual((code, report["written"]), (0, 1))
+        self.assertTrue((config.scope_dir("project", str(dotted)) / "a.md").is_file())
+
+    def test_dry_run_and_the_real_run_agree_on_an_oversized_note(self):
+        memory = self.memory_dir()
+        self.note(memory, "big.md", body="x" * (store.MAX_BODY_BYTES + 1))
+
+        code, report = self.migrate("--dry-run")
+        self.assertEqual((code, report["invalid"], report["would_write"]), (1, 1, 0))
+        code, report = self.migrate()
+        self.assertEqual((code, report["invalid"]), (1, 1))
 
 
 class RootOverrideTests(CliTestCase):

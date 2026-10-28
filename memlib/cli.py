@@ -17,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import config, dream, index, store
+from . import config, dream, index, migrate, store
 
 
 def _read_content(args) -> str:
@@ -30,10 +30,10 @@ def _read_content(args) -> str:
     return sys.stdin.read()
 
 
-def _emit(payload: dict) -> int:
+def _emit(payload: dict, code: int = 0) -> int:
     json.dump(payload, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
-    return 0
+    return code
 
 
 def cmd_write(args) -> int:
@@ -139,6 +139,24 @@ def cmd_dream(args) -> int:
     return dream.run(cwd=args.cwd, all_scopes=args.all)
 
 
+def cmd_migrate(args) -> int:
+    types = {part.strip() for part in args.global_types.split(",") if part.strip()}
+    report = migrate.run(
+        source=Path(args.source).expanduser() if args.source else None,
+        cwd=args.cwd,
+        global_types=types,
+        dry_run=args.dry_run,
+    )
+    # A bulk import can succeed file by file; the exit code still says whether
+    # something was left behind, with 3 (a secret) winning over 1 (a note that
+    # could not be imported or disagreed with what is already stored).
+    if report["refused"]:
+        return _emit(report, 3)
+    if report["invalid"] or report["collision"]:
+        return _emit(report, 1)
+    return _emit(report)
+
+
 class _Parser(argparse.ArgumentParser):
     """Usage errors are invalid input, like every other bad argument.
 
@@ -210,6 +228,32 @@ def build_parser() -> argparse.ArgumentParser:
     consolidate.add_argument("--cwd", default=".")
     consolidate.add_argument("--all", action="store_true", help="every project, not just this one")
     consolidate.set_defaults(func=cmd_dream)
+
+    migration = sub.add_parser("migrate", help="import Claude Code's memories")
+    migration.add_argument(
+        "--from",
+        dest="source",
+        help="Claude Code projects root, or with --cwd one memory directory "
+        "(default: $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects)",
+    )
+    migration.add_argument(
+        "--cwd",
+        help="only this project, mapped to its own project scope",
+    )
+    migration.add_argument(
+        "--global",
+        dest="global_types",
+        default="",
+        metavar="TYPES",
+        help="comma-separated types to put in the global scope, e.g. user,feedback "
+        "(default: every note stays in its project)",
+    )
+    migration.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would be copied and write nothing",
+    )
+    migration.set_defaults(func=cmd_migrate)
 
     return parser
 

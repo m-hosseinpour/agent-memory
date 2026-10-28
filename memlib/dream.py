@@ -210,7 +210,7 @@ def _merge_duplicates(
                 entry
                 for entry in clusters
                 if entry[0].type == memory.type
-                and _similar(entry[0].description, memory.description)
+                and similar_descriptions(entry[0].description, memory.description)
             ),
             None,
         )
@@ -264,7 +264,7 @@ def _repair_index(directory: Path) -> int:
     return len(old - new)
 
 
-def _similar(first: str, second: str) -> bool:
+def similar_descriptions(first: str, second: str) -> bool:
     """Whether two descriptions are the same note, judged only under the word ceiling."""
     left, right = store.tokens(first), store.tokens(second)
     if not left or not right:

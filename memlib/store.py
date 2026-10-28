@@ -95,8 +95,11 @@ def version_of(data: bytes) -> str:
 def slug_for(cwd: str | os.PathLike[str]) -> str:
     """Map a working directory to a stable directory name.
 
-    `/home/u/proj` becomes `-home-u-proj`, the same convention Claude Code and
-    Qoder use, so directories are recognisable across tools.
+    `/home/u/proj` becomes `-home-u-proj`. It is close to, but not the same as,
+    Claude Code's directory name: this one keeps `.` and `_`, while Claude Code
+    turns every non-alphanumeric into `-` (`/home/u/.cache` becomes
+    `-home-u-.cache` here but `-home-u--cache` there). A name cannot be decoded
+    back, which is why migration reads the recorded cwd instead.
     """
     absolute = os.path.abspath(os.fspath(cwd))
     return re.sub(r"[^A-Za-z0-9._-]", "-", absolute)
@@ -251,7 +254,7 @@ def list_memories(directory: Path) -> list[Memory]:
 _LINE_BREAKS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
 
 
-def _single_line(value: str, field: str) -> None:
+def check_single_line(value: str, field: str) -> None:
     """Frontmatter is parsed line by line, so a quoted scalar must stay on one."""
     if any(ch in _LINE_BREAKS for ch in value):
         raise StoreError(f"{field} must be a single line (it contains a line break)")
@@ -270,6 +273,35 @@ def check_filename(filename: str) -> str:
     if any(ch in filename for ch in "\r\n\0"):
         raise StoreError("filename must not contain control characters")
     return filename
+
+
+def validate(
+    filename: str,
+    body: str,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> None:
+    """Refuse a note that `write` would refuse, without touching the store.
+
+    Importers need this to preview a batch honestly: a dry run has to apply the
+    same filename, size, single-line and secret rules as the real write.
+    """
+    check_filename(filename)
+    if name is not None:
+        check_single_line(name, "name")
+    if description is not None:
+        check_single_line(description, "description")
+
+    encoded = body.encode("utf-8")
+    if len(encoded) > MAX_BODY_BYTES:
+        raise StoreError(f"body is {len(encoded)} bytes, over the {MAX_BODY_BYTES} cap")
+    if not body.strip():
+        raise StoreError("body is empty")
+
+    secret = find_secret(body) or (find_secret(description) if description else None)
+    if secret:
+        raise SecretError(f"content looks like a secret (matched /{secret}/); refusing to store it")
 
 
 def write(
@@ -298,25 +330,11 @@ def write(
     `name` and `description` must be one line: the frontmatter is parsed line
     by line, so a line break is refused before anything is written.
     """
-    check_filename(filename)
     # Refuse before touching the directory: a rejected write must leave no file
     # and no newly created scope behind.
-    if name is not None:
-        _single_line(name, "name")
-    if description is not None:
-        _single_line(description, "description")
+    validate(filename, body, name=name, description=description)
     if if_version is None and not force:
         raise StoreError("if_version is required (pass the version from read, or 'new')")
-
-    encoded = body.encode("utf-8")
-    if len(encoded) > MAX_BODY_BYTES:
-        raise StoreError(f"body is {len(encoded)} bytes, over the {MAX_BODY_BYTES} cap")
-    if not body.strip():
-        raise StoreError("body is empty")
-
-    secret = find_secret(body) or (find_secret(description) if description else None)
-    if secret:
-        raise SecretError(f"content looks like a secret (matched /{secret}/); refusing to store it")
 
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / filename

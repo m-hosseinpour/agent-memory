@@ -198,11 +198,11 @@ class MergeTests(DreamTestCase):
         self.assertEqual(self.files(), ["MEMORY.md", "b.md"])
 
     def test_similarity_requires_the_same_word_set(self):
-        self.assertFalse(dream._similar("release tag", "release tag blue"))
-        self.assertFalse(dream._similar("release tag v2", "release tag v3"))
-        self.assertTrue(dream._similar("release tag", "tag, release"))
-        self.assertFalse(dream._similar("", "release tag"))
-        self.assertFalse(dream._similar("", ""))
+        self.assertFalse(dream.similar_descriptions("release tag", "release tag blue"))
+        self.assertFalse(dream.similar_descriptions("release tag v2", "release tag v3"))
+        self.assertTrue(dream.similar_descriptions("release tag", "tag, release"))
+        self.assertFalse(dream.similar_descriptions("", "release tag"))
+        self.assertFalse(dream.similar_descriptions("", ""))
 
     def test_the_threshold_is_only_safe_up_to_its_word_ceiling(self):
         # 0.95 is exactly the point where one added word to a 19-word
@@ -217,7 +217,7 @@ class MergeTests(DreamTestCase):
         # pass declines instead of guessing: two identical long descriptions
         # stay apart rather than risk deleting an independent note.
         long = " ".join(f"word{number}" for number in range(dream.DUPLICATE_WORDS + 1))
-        self.assertFalse(dream._similar(long, long))
+        self.assertFalse(dream.similar_descriptions(long, long))
         self.put("project", "a.md", "one", long, modified=OLD)
         self.put("project", "b.md", "two", long, modified=NEW)
         _, out = self.run_dream()
