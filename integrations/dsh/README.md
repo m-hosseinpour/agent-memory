@@ -40,19 +40,22 @@ their bundles; a directory copied into `~/.dsh/plugins` alone is not loaded.
 ln -s /home/mahdi/workspace/agent-memory/integrations/dsh ~/.dsh/plugins/memory
 dsh plugin --profile web add link:$HOME/.dsh/plugins/memory
 
-# 2. select the bundle, so its cordis.patch.yml is applied
-#    (pnpm add does not edit dsh.profile.bundles; do it by hand)
-$EDITOR ~/.dsh/profiles/web/package.json
-#   "dsh": { "profile": { "bundles": [ ..., "dsh-memory" ] } }
-
-# 3. restart the DSH process — the bundle is loaded at startup
+# 2. restart the DSH process — the bundle is loaded at startup
 ```
 
-`dsh plugin ... add` writes the dependency; adding the name to
-`dsh.profile.bundles` is what inserts the `memory` row from
-`cordis.patch.yml`. If you copy the directory instead of symlinking it, set
-`config.command` to an absolute `bin/mem`, because the checkout fallback is
-derived from this file's own location. Alternatively, mount the row by hand in
+`dsh plugin ... add` is the plugin manager, not bare `pnpm add`: because this
+package declares `dsh.bundle.patch`, it writes the dependency **and** appends
+`dsh-memory` to `dsh.profile.bundles` (checked on dsh 0.2.1-rc.2). That entry
+is what inserts the `memory` row from `cordis.patch.yml`; confirm it with
+`dsh --profile web --dump-config | grep -n -A2 dsh-memory`. Adding the name by
+hand is only needed when the dependency was installed with raw `pnpm`.
+With the base bundle's `hmr` entry enabled, a plugin-manager operation may
+apply to a running harness without a restart; a restart is still the reliable
+way to load a new bundle from scratch.
+
+If you copy the directory instead of symlinking it, set `config.command` to an
+absolute `bin/mem`, because the checkout fallback is derived from this file's
+own location. Alternatively, mount the row by hand in
 `~/.dsh/profiles/web/cordis.patch.yml` (or the home-level
 `~/.dsh/cordis.patch.yml`):
 

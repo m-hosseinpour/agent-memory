@@ -21,9 +21,10 @@ plugin), and the two background passes — `mem extract` (end-of-session extract
 configurable command) and `mem dream` (session-counted consolidation, which the SessionStart
 hook spawns once the counter reaches `dream.every_sessions`).
 
-The store is installed on this machine (`~/.agents/memory`), wired into Claude Code and
-opencode; the DSH plugin still needs the steps in `integrations/dsh/README.md`. `HANDOFF.md`
-tracks what is left.
+The store is installed on this machine (`~/.agents/memory`) and wired into all four agents:
+Claude Code (hooks + MCP), opencode (plugin + MCP), and DSH, whose plugin is installed into
+the `web` profile as a linked package and a selected bundle. What is left is the open design
+decision — which model drives extraction — not code; `HANDOFF.md` tracks it.
 
 ## Usage
 
@@ -106,7 +107,7 @@ memlib/dream.py      consolidation: dedupe, replace, index repair, git commits
 memlib/extract.py    transcript readers + one model call + write-through
 PROTOCOL.md          the agent-facing contract (copied into the store root)
 docs/                research.md, design.md, roadmap.md — the background, kept in-repo
-tests/               unittest (stdlib only), 168 tests
+tests/               unittest (stdlib only), 175 tests
 integrations/opencode/  opencode V2 plugin (session.idle, compaction hook)
 integrations/dsh/       cordis plugin (prompt section, pre-step, turn-stopping, tools)
 install/             merge fragments: claude-code.json, mcp.json, opencode.json, agents-md.md
@@ -144,6 +145,11 @@ There is no package to install: `bin/mem` runs straight from this checkout.
    run in parallel with this one.
 5. Extraction stays off until you pick a model: set `[extract] enabled = true` and
    `command = "claude -p"` (or any command that reads the prompt on stdin and prints JSON).
+6. DSH: link `integrations/dsh` into `~/.dsh/plugins/memory`, register it with
+   `dsh plugin --profile <name> add link:$HOME/.dsh/plugins/memory`, and restart — the
+   details are in `integrations/dsh/README.md`. opencode has its own steps in
+   `integrations/opencode/README.md` (copy `mem.js` into its plugins directory, merge
+   `install/opencode.json`).
 
 ## Tests
 

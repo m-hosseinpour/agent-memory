@@ -5,7 +5,12 @@ start here with no other context.
 
 P2 was committed as `0b83b0d`, independently reviewed, and the review's findings were fixed
 in a follow-up commit (see "Review of P2 and what changed"). The store is installed and
-wired into Claude Code and opencode; the DSH plugin install is the one remaining step.
+wired into all four agents — Claude Code, opencode, and the DSH plugin (linked into the
+`web` profile as a package and a selected bundle). The remaining work is a design decision
+(which model drives extraction), not an install step.
+
+The background documents now live in `docs/` in this repository; the old
+`~/.dsh/memory-system/` directory was migrated there and deleted.
 
 ## Read these first
 
@@ -132,7 +137,8 @@ modify the four P0 modules without saying so.
   the install step below.
 
 Note on P0/P1 docs above: the "expected ImportError" comment and the P1 test count describe
-the tree as it was then. The suite is 168 tests now.
+the tree as it was then. The suite is 175 tests now (the 7 added in `872d0bf` came after
+P2 and the counts in this file were not swept then).
 
 ## Install state (2026-10-28)
 
@@ -149,18 +155,21 @@ Done, on this machine:
   `✔ Connected`.
 - `~/.config/opencode/opencode.json`: `instructions` gained
   `~/.agents/memory/global/MEMORY.md`; `mcp.servers.mem` added next to searxng/playwright.
+- **DSH plugin installed** into the `web` profile: `~/.dsh/plugins/memory` is a symlink to
+  `integrations/dsh`, `dsh plugin --profile web add link:...` wrote the dependency,
+  and it appended `dsh-memory` to `dsh.profile.bundles` itself (the plugin manager does
+  this when the package declares `dsh.bundle.patch` — the README used to say to do it by
+  hand). `dsh --profile web --dump-config` shows the composed `memory` row. The running
+  harness at `127.0.0.1:3080` was started before this, so a restart loads it there; HMR is
+  enabled, so the plugin-manager operation may already have applied.
 - Extraction is **off** (`enabled = false`), as decided.
 
 Still to do:
 
-1. **DSH plugin** — follow `integrations/dsh/README.md`: symlink `integrations/dsh` to
-   `~/.dsh/plugins/memory`, `dsh plugin --profile web add link:...`, add `dsh-memory` to
-   `dsh.profile.bundles` in `~/.dsh/profiles/web/package.json`, then restart DSH. Not done
-   because it changes the live harness and needs a restart.
-2. **Choose the extraction model** — still the open design decision. `extract.command` is the
+1. **Choose the extraction model** — still the open design decision. `extract.command` is the
    whole switch (e.g. `claude -p`); keep it off until chosen, then sample real sessions for
    noise.
-3. Optional, later: `mem eval` / `mem stats`, note-body search (recall is description-only).
+2. Optional, later: `mem eval` / `mem stats`, note-body search (recall is description-only).
 
 ## Review of P2 and what changed
 
