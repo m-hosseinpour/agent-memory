@@ -30,7 +30,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 | `docs/design.md` | the design and rejected options; §11 is the closed decisions |
 | `docs/operations.md` | this machine's state and setup |
 | `docs/roadmap.md` | history of what shipped |
-| `HANDOFF.md` | the open work order; delete or rewrite it when done |
+| `HANDOFF.md` | only while work is open: the current work order. Not in the tree today; create it when work opens and delete it when the list is empty |
 | `docs/research.md` | historical research on Claude Code and Qoder |
 
 - README and PROTOCOL are English; everything else is Persian, and so are the answers to the user.
