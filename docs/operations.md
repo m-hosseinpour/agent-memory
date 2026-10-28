@@ -61,9 +61,18 @@ uv tool install --reinstall .
 
 ```bash
 claude mcp list                 # mem باید connected باشد
+opencode mcp list               # همان؛ بعد از restart سرویس اول opencode debug config
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
   | ./bin/mem mcp | python3 -m json.tool | head -40
 ```
+
+هر سه کلاینت `mem mcp` را بدون env اجرا می‌کنند، پس هر سه همان `~/.agents/memory` را می‌بینند.
+خواندن بین دو کلاینت در ۲۰۲۶-۱۰-۲۹ تأیید شد: یادداشتی که از راه `mem mcp` روی یک انبار موقت
+نوشته شد، با `claude -p` (ابزار `mcp__mem__memory_read`) و `opencode run` (ابزار
+`mem_memory_read`) هم خوانده شد.
+
+`opencode mcp list` بلافاصله بعد از `opencode service restart` ممکن است «No MCP servers
+configured» بگوید تا وقتی location بارگذاری شود؛ یک `opencode debug config` پیش از آن کافی است.
 
 ## بررسی سریع
 
