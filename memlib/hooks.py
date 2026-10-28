@@ -83,6 +83,11 @@ def run(event, stdin=None, stdout=None) -> int:
         in_stream = sys.stdin if stdin is None else stdin
         out_stream = sys.stdout if stdout is None else stdout
         payload = _read_payload(in_stream)
+        # An extraction child (`claude -p` and friends) runs these same hooks.
+        # Doing nothing here breaks the extract → hook → extract chain; stdin is
+        # still drained above so the host never sees a broken pipe.
+        if os.environ.get(config.EXTRACT_CHILD_ENV):
+            return 0
         if event == "session-start":
             _session_start(payload, out_stream)
         elif event == "user-prompt":

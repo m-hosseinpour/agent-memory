@@ -137,7 +137,7 @@ modify the four P0 modules without saying so.
   the install step below.
 
 Note on P0/P1 docs above: the "expected ImportError" comment and the P1 test count describe
-the tree as it was then. The suite is 175 tests now (the 7 added in `872d0bf` came after
+the tree as it was then. The suite is 184 tests now (the 7 added in `872d0bf` came after
 P2 and the counts in this file were not swept then).
 
 ## Install state (2026-10-28)
@@ -166,10 +166,39 @@ Done, on this machine:
 
 Still to do:
 
-1. **Choose the extraction model** — still the open design decision. `extract.command` is the
-   whole switch (e.g. `claude -p`); keep it off until chosen, then sample real sessions for
-   noise.
+1. **Turn extraction on** — the model question is answered by elimination; what is left is
+   accepting the recurring cost. `extract.command = "claude -p"` is the only workable
+   choice on this machine (`claude` 2.1.301 is installed and authenticated; `qoder` is
+   broken here; the aval-ai key is not in the environment). Set `enabled = true`,
+   `timeout = 60`, then read the first few notes it proposes and turn it off again if they
+   are noise.
 2. Optional, later: `mem eval` / `mem stats`, note-body search (recall is description-only).
+
+## Extraction readiness — checked against real sessions (2026-10-28)
+
+The pipeline had never run outside the unit tests. It has now, with a deterministic stub
+command on this machine's real transcripts, with `MEM_ROOT` pointed at a scratch root:
+
+- **All three readers work on real data**: DSH `session.v4.jsonl.zstd` (463 KB compressed →
+  2.4 MB decoded → 23 KB prompt), Claude Code `.jsonl`, and opencode's `session_message`
+  SQLite table (its real schema is `session_id`/`seq`/`type`/`data`, with the user text under
+  `data.text` and the assistant content under `data.content` — both match the reader).
+- Writes land in the project scope, `MEMORY.md` is rebuilt, `.state/extract.json` records a
+  per-transcript offset, an unchanged transcript is a no-op, and a name that already exists
+  is skipped (create-only, across both scopes). Missing `--session` on a SQLite transcript is
+  a clean `{"ok": false, "error": "transcript"}` with exit 1.
+- **A real `claude -p` extraction worked**: one note, 18.7 s, on this session's transcript.
+
+Two bugs came out of that run, both fixed with tests:
+
+- **Extraction recursed through our own hooks.** `claude -p` loads `~/.claude/settings.json`,
+  so the child fired `SessionStart` (the counter went 1 → 2) and `Stop` (which spawns
+  `mem extract`). With extraction enabled, each child would spawn another and pay for it.
+  `mem extract` now exports `MEM_EXTRACT_CHILD` to the command, and `memlib/hooks.py`
+  returns before dispatch when it is set — stdin is still drained first.
+- **The 20 s command timeout was 1.3 s away from failing** a normal session-sized call. It is
+  now `extract.timeout` (default 20, clamped to 600); zstd decompression got its own
+  `DECOMPRESS_TIMEOUT` instead of borrowing the model's.
 
 ## Review of P2 and what changed
 

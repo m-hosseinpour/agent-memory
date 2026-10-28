@@ -193,6 +193,35 @@ class SessionStartTests(HookTestCase):
         self.assertNotIn("sk-", context)
 
 
+class ExtractChildTests(HookTestCase):
+    """Inside an extraction child every hook is inert: no index, no counter, no spawn.
+
+    `claude -p` used as `extract.command` loads these same hooks; without the marker
+    its Stop hook would start another extraction, and whose own Stop would start a
+    third. Nothing here may run in that child.
+    """
+
+    def setUp(self):
+        super().setUp()
+        os.environ[config.EXTRACT_CHILD_ENV] = "1"
+        self.addCleanup(os.environ.pop, config.EXTRACT_CHILD_ENV, None)
+
+    def test_session_start_injects_nothing_and_does_not_count(self):
+        code, text = self.run_hook("session-start", self.payload("session-start"))
+        self.assertEqual((code, text), (0, ""))
+        self.assertEqual(hooks.session_count(), 0)
+
+    def test_user_prompt_injects_nothing(self):
+        code, text = self.run_hook("user-prompt", self.payload("user-prompt"))
+        self.assertEqual((code, text), (0, ""))
+
+    def test_stop_spawns_nothing(self):
+        with mock.patch("memlib.hooks.subprocess.Popen") as popen:
+            code, text = self.run_hook("stop", self.payload("stop"))
+        self.assertEqual((code, text), (0, ""))
+        popen.assert_not_called()
+
+
 class UserPromptTests(HookTestCase):
     def test_silence_when_nothing_matches(self):
         self.write_config("[recall]\nselect_threshold = 1\ntop_k = 5\n")

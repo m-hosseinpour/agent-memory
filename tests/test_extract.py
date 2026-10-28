@@ -25,12 +25,17 @@ from memlib import cli, config, extract, store
 
 FAKE_LLM = '''\
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 here = Path(__file__).resolve().parent
 prompt = sys.stdin.read()
 (here / "prompt.txt").write_text(prompt, encoding="utf-8")
+(here / "child_marker.txt").write_text(
+    os.environ.get("MEM_EXTRACT_CHILD", ""), encoding="utf-8"
+)
 with (here / "calls.txt").open("a", encoding="utf-8") as handle:
     handle.write("call\\n")
 
@@ -39,6 +44,9 @@ mode = mode_file.read_text(encoding="utf-8").strip() if mode_file.exists() else 
 if mode == "fail":
     sys.stderr.write("the model exploded\\n")
     sys.exit(3)
+if mode == "sleep":
+    time.sleep(60)
+    sys.exit(0)
 if mode == "garbage":
     sys.stdout.write("this is not JSON at all")
     sys.exit(0)
@@ -72,7 +80,7 @@ class ExtractTestCase(unittest.TestCase):
 
     # -- helpers ---------------------------------------------------------
 
-    def write_config(self, enabled=True, command=None):
+    def write_config(self, enabled=True, command=None, timeout=None):
         if command is None:
             command = "{} {}".format(
                 shlex.quote(sys.executable or "python3"), shlex.quote(str(self.script))
@@ -80,6 +88,8 @@ class ExtractTestCase(unittest.TestCase):
         lines = ["[extract]", "enabled = {}".format("true" if enabled else "false")]
         if command:
             lines.append("command = {}".format(command))
+        if timeout is not None:
+            lines.append("timeout = {}".format(timeout))
         (self.root / "config.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def set_response(self, payload):
@@ -604,6 +614,64 @@ class WritingTests(ExtractTestCase):
         self.assertEqual(code, 0)
         self.assertEqual(data["written"], ["odd-type.md"])
         self.assertEqual(store.load(self.project_dir / "odd-type.md").type, store.DEFAULT_TYPE)
+
+
+class ExtractChildTests(ExtractTestCase):
+    """The model command must be told it is a child, so its hooks stay inert.
+
+    An agent used as the extractor (`claude -p`) loads this repo's hooks. Marking
+    the child is what stops the Stop hook from starting a second extraction, whose
+    own Stop would start a third — a chain of paid model calls.
+    """
+
+    def test_the_command_receives_the_child_marker(self):
+        self.write_config()
+        self.set_response({"memories": []})
+        self.extract(self.claude_transcript(), agent="claude-code", session="session-abc")
+        marker = (self.root / "child_marker.txt").read_text(encoding="utf-8")
+        self.assertEqual(marker, "1")
+
+    def test_the_marker_is_not_leaked_into_this_process(self):
+        self.write_config()
+        self.set_response({"memories": []})
+        self.extract(self.claude_transcript(), agent="claude-code", session="session-abc")
+        self.assertIsNone(os.environ.get(config.EXTRACT_CHILD_ENV))
+
+
+class TimeoutTests(ExtractTestCase):
+    """One model call may take a while: `claude -p` on a real session took 18.7 s.
+
+    The 20 s default is right for a small API call and wrong for an agent CLI, so
+    `extract.timeout` overrides it — and a value that is nonsense must not turn
+    the hook's detached pass into a hang.
+    """
+
+    def test_the_configured_timeout_aborts_a_slow_command(self):
+        self.write_config(timeout=1)
+        self.set_mode("sleep")
+        code, data = self.output(
+            *self.extract(self.claude_transcript(), agent="claude-code", session="session-abc")
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(data["error"], "command")
+        self.assertIn("timed out after 1s", data["message"])
+
+    def test_unset_timeout_is_the_default(self):
+        self.assertEqual(extract.command_timeout({}), extract.COMMAND_TIMEOUT)
+
+    def test_invalid_values_fall_back_to_the_default(self):
+        for value in (0, -5, "soon", None):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    extract.command_timeout({"extract": {"timeout": value}}),
+                    extract.COMMAND_TIMEOUT,
+                )
+
+    def test_large_values_are_clamped(self):
+        self.assertEqual(
+            extract.command_timeout({"extract": {"timeout": 100_000}}),
+            extract.MAX_COMMAND_TIMEOUT,
+        )
 
 
 class FailureTests(ExtractTestCase):

@@ -34,7 +34,11 @@ MAX_INDEX_CHARS = 8_000
 MAX_NAME_CHARS = 60
 MAX_DESCRIPTION_CHARS = 200
 MAX_ERROR_CHARS = 300
+# Default cap for one model call. Agent CLIs used as the command (`claude -p`)
+# can take much longer than a plain API call, so `extract.timeout` overrides it.
 COMMAND_TIMEOUT = 20
+# Local zstd decompression only; this is disk work, never the model.
+DECOMPRESS_TIMEOUT = 20
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
@@ -97,7 +101,9 @@ def run(
         return 1
 
     try:
-        return _run_enabled(command, transcript, agent, session, cwd)
+        return _run_enabled(
+            command, transcript, agent, session, cwd, command_timeout(settings)
+        )
     except ExtractError as exc:
         _emit_error(exc.code, exc.message)
         return 1
@@ -106,8 +112,26 @@ def run(
         return 1
 
 
+MAX_COMMAND_TIMEOUT = 600
+
+
+def command_timeout(settings: dict) -> int:
+    """`extract.timeout` in seconds, bounded; the default when unset or invalid.
+
+    The call runs detached from the agent's turn, so a generous value costs no
+    latency — only a longer-lived child when the model hangs.
+    """
+    try:
+        seconds = int(config.get("extract", "timeout", settings))
+    except (TypeError, ValueError):
+        return COMMAND_TIMEOUT
+    if seconds <= 0:
+        return COMMAND_TIMEOUT
+    return min(seconds, MAX_COMMAND_TIMEOUT)
+
+
 def _run_enabled(
-    command: str, transcript: str, agent: str, session: str, cwd: str
+    command: str, transcript: str, agent: str, session: str, cwd: str, timeout: int
 ) -> int:
     path = _resolve_transcript(transcript, agent, session)
     project_cwd = os.path.abspath(os.path.expanduser(cwd or "."))
@@ -137,7 +161,7 @@ def _run_enabled(
         return 0
 
     prompt = _build_prompt(project_cwd, rendered)
-    proposals = _parse_output(_run_command(command, prompt, project_cwd))
+    proposals = _parse_output(_run_command(command, prompt, project_cwd, timeout))
 
     # Extraction writes to the project scope only; the model never sees bodies,
     # so letting it guess "global" would put guesses into every project. A name
@@ -330,7 +354,7 @@ def _zstd_decode(path: Path) -> bytes:
         proc = subprocess.run(
             ["zstd", "-dc", str(path)],
             capture_output=True,
-            timeout=COMMAND_TIMEOUT,
+            timeout=DECOMPRESS_TIMEOUT,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise ExtractError(
@@ -522,7 +546,7 @@ def _tail(text: str, limit: int) -> str:
 # the model call
 
 
-def _run_command(command: str, prompt: str, cwd: str) -> str:
+def _run_command(command: str, prompt: str, cwd: str, timeout: int) -> str:
     try:
         argv = shlex.split(command)
     except ValueError as exc:
@@ -538,12 +562,15 @@ def _run_command(command: str, prompt: str, cwd: str) -> str:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=COMMAND_TIMEOUT,
+            timeout=timeout,
             cwd=cwd,
+            # An agent used as the extractor (`claude -p`) carries our hooks; the
+            # marker makes them no-ops there instead of recursing.
+            env={**os.environ, config.EXTRACT_CHILD_ENV: "1"},
         )
     except subprocess.TimeoutExpired:
         raise ExtractError(
-            "command", "extract command timed out after {}s".format(COMMAND_TIMEOUT)
+            "command", "extract command timed out after {}s".format(timeout)
         )
     except OSError as exc:
         raise ExtractError("command", "could not run extract command: {}".format(exc))

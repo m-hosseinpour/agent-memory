@@ -73,6 +73,7 @@ top_k = 8
 [extract]
 enabled = false                  # default off; turn it on deliberately
 command = "claude -p"            # the model call: prompt on stdin, JSON on stdout
+timeout = 20                     # seconds for one call; agent CLIs need ~60
 model = ""                       # informational; the model belongs inside `command`
 
 [dream]
@@ -86,6 +87,18 @@ never sees note bodies, so it is not asked to guess "global"; a durable user pre
 written there by the agent itself with `memory_write` (or `mem write --scope global`).
 The prompt asks for strict JSON, and every item still passes the normal secret scan and size
 cap. The command's working directory is the project.
+
+**Using an agent as the command** (`claude -p`, which is what this machine uses) has two
+consequences, both handled:
+
+- The child runs with `MEM_EXTRACT_CHILD=1` in its environment, and every hook of this tool
+  exits immediately when it sees that variable. Without it, the child's `Stop` hook would
+  spawn another extraction, whose own `Stop` would spawn a third — a chain of paid calls.
+  This is why extraction must go through `mem extract`, not a bare hook.
+- One real call on a session-sized tail took about 19 s, so the 20 s default is too tight for
+  an agent CLI. Set `timeout = 60` (or more; the call runs detached, so it costs no
+  latency). A timeout does not advance the offset, so the next turn would retry and pay
+  again — the reason to leave headroom.
 
 `mem dream` merges notes of the same type whose descriptions are near-identical, lets the
 newer of two notes with the same name *and* type replace the older, repairs `MEMORY.md`,
@@ -107,7 +120,7 @@ memlib/dream.py      consolidation: dedupe, replace, index repair, git commits
 memlib/extract.py    transcript readers + one model call + write-through
 PROTOCOL.md          the agent-facing contract (copied into the store root)
 docs/                research.md, design.md, roadmap.md — the background, kept in-repo
-tests/               unittest (stdlib only), 175 tests
+tests/               unittest (stdlib only), 184 tests
 integrations/opencode/  opencode V2 plugin (session.idle, compaction hook)
 integrations/dsh/       cordis plugin (prompt section, pre-step, turn-stopping, tools)
 install/             merge fragments: claude-code.json, mcp.json, opencode.json, agents-md.md
