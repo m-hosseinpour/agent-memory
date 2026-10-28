@@ -154,12 +154,6 @@ def main():
     if log:
         with open(log, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
-    if command == "extract":
-        marker = os.environ.get("FAKE_EXTRACT_MARKER")
-        if marker:
-            with open(marker, "w", encoding="utf-8") as handle:
-                json.dump(record, handle)
-        return 0
     if command == "index":
         sys.stdout.write(os.environ.get("FAKE_INDEX", "") + "\n")
         return 0
@@ -355,21 +349,6 @@ if (scenario === 'main') {
   assert.ok(searchRecord.argv.includes('--top-k'));
 }
 
-// --- agent/turn-stopping ---------------------------------------------------
-let extract = null;
-if (scenario === 'main') {
-  const turnStopping = events.get('agent/turn-stopping');
-  assert.equal(typeof turnStopping, 'function', 'agent/turn-stopping listener');
-  turnStopping({ agent, turn: 1, signal });
-  const marker = env.FAKE_EXTRACT_MARKER;
-  const deadline = Date.now() + 3000;
-  while (!existsSync(marker) && Date.now() < deadline) {
-    await new Promise((done) => setTimeout(done, 25));
-  }
-  assert.ok(existsSync(marker), 'detached mem extract ran');
-  extract = JSON.parse(readFileSync(marker, 'utf8'));
-}
-
 console.log(
   JSON.stringify({
     section: { name: section.name, order: section.order, interpolate: section.interpolate },
@@ -385,7 +364,6 @@ console.log(
     writeRecord,
     searchRecord,
     indexRecord,
-    extract,
     labels,
     warnings,
   }),
@@ -412,7 +390,6 @@ class PluginLoadTests(unittest.TestCase):
         cls.harness = cls.scratch / "harness.mjs"
         cls.harness.write_text(HARNESS, encoding="utf-8")
         cls.log = cls.scratch / "mem.log"
-        cls.marker = cls.scratch / "extract.json"
         cls.dsh_home = cls.scratch / "dsh-home"
         cls.transcript = (
             cls.dsh_home
@@ -432,7 +409,6 @@ class PluginLoadTests(unittest.TestCase):
         # Each run observes only its own calls: a stale marker or log would let a
         # test pass without the plugin having done anything.
         self.log.unlink(missing_ok=True)
-        self.marker.unlink(missing_ok=True)
         env = node_env(
             SCENARIO=scenario,
             PLUGIN_PATH=str(INDEX_JS),
@@ -440,7 +416,6 @@ class PluginLoadTests(unittest.TestCase):
             FAKE_WORKDIR=str(self.workdir),
             FAKE_SERVICE_DIR=str(self.service_dir),
             FAKE_MEM_LOG=str(self.log),
-            FAKE_EXTRACT_MARKER=str(self.marker),
             DSH_HOME=str(self.dsh_home),
             MEM_ROOT=str(self.store),
             FAKE_PROMPT="please remember the pnpm lockfile rule",
@@ -453,7 +428,7 @@ class PluginLoadTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout.strip())
 
-    def test_section_prestep_tools_extract(self):
+    def test_section_prestep_and_tools(self):
         summary = self.run_harness("main")
 
         self.assertEqual(summary["section"]["name"], "memory:index")
@@ -498,17 +473,6 @@ class PluginLoadTests(unittest.TestCase):
         # The index block comes from mem index, not from JS.
         self.assertIn("--scope", summary["indexRecord"]["argv"])
         self.assertIn("all", summary["indexRecord"]["argv"])
-
-        # Extract ran detached, against this session's log.
-        extract = summary["extract"]
-        self.assertEqual(extract["argv"][0], "extract")
-        self.assertIn("--agent", extract["argv"])
-        self.assertIn("dsh", extract["argv"])
-        self.assertIn("--session", extract["argv"])
-        self.assertIn("session-test", extract["argv"])
-        self.assertIn("--transcript", extract["argv"])
-        self.assertIn(str(self.transcript), extract["argv"])
-        self.assertEqual(extract["cwd"], str(self.service_dir))
 
     def test_no_recall_hits_appends_nothing(self):
         summary = self.run_harness("nohits", FAKE_RECALL="")
@@ -602,9 +566,6 @@ await assert.rejects(
     error.message.includes('conflict') &&
     error.message.includes('Never run npm install'),
 );
-
-// The detached extract path is covered by the fake-host test; this one stays
-// synchronous so no stray mem process outlives the scratch store.
 
 console.log(JSON.stringify({ sectionText, recallText: decision.messages[1].content[0].text, search, warnings }));
 '''

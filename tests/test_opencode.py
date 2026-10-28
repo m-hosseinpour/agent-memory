@@ -75,20 +75,15 @@ class PluginSourceTests(unittest.TestCase):
         self.assertTrue(index, commands)
         self.assertIn("--cwd", index[0])
 
-        extract = [c for c in commands if re.search(r"\bextract\b", c)]
-        self.assertTrue(extract, commands)
-        command = extract[0]
-        for flag in ("--transcript", "--agent opencode", "--session", "--cwd"):
-            self.assertIn(flag, command)
-
     def test_hooks_are_the_v2_equivalents(self):
         source = PLUGIN.read_text(encoding="utf-8")
         # V1 names would mean the plugin cannot load in opencode 2.x.
         self.assertNotIn('"experimental.session.compacting"', source)
         self.assertNotIn('"event":', source)
         self.assertIn('hook("compaction"', source)
-        self.assertIn("ctx.event.subscribe", source)
-        self.assertIn("session.idle", source)
+        # No idle subscription: extraction was removed, so nothing writes on idle.
+        self.assertNotIn("ctx.event.subscribe", source)
+        self.assertNotIn("session.idle", source)
 
     def test_no_invented_session_start_hook(self):
         source = PLUGIN.read_text(encoding="utf-8")

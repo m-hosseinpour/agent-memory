@@ -9,13 +9,12 @@ What it adds:
 |---|---|
 | `memory:index` system-prompt section (reference notes, not instructions) | `mem index --scope all` |
 | `agent/pre-step` listener appending recall lines for the prompt | `mem recall <prompt>` |
-| `agent/turn-stopping` listener running extraction detached | `mem extract` |
 | tools `memory_read`, `memory_write`, `memory_search` | `mem read` / `mem write` / `mem recall` |
 
 The index block is capped by `context.index_max_lines` in the store's
 `config.toml`; the CLI applies the cap, so the plugin has no copy of it.
 Nothing is appended when `mem recall` returns no lines, and every failure in
-the prompt/recall/extract paths is swallowed — a memory outage must not break a
+the prompt/recall/tool paths is swallowed — a memory outage must not break a
 turn.
 
 ## Requirements
@@ -76,9 +75,8 @@ own location. Alternatively, mount the row by hand in
 | `root` | unset | Adds `MEM_ROOT` to every `mem` child process |
 | `timeoutMs` | `10000` | Per-call limit for recall and the tools (the synchronous index call is capped at 2s so a hung `mem` cannot stall prompt assembly) |
 
-Environment read by the plugin: `PATH` (command lookup), `DSH_HOME` (locating
-this session's log for `--transcript`), and everything `mem` itself reads
-(`MEM_ROOT` when `root` is unset).
+Environment read by the plugin: `PATH` (command lookup) and everything `mem` itself
+reads (`MEM_ROOT` when `root` is unset).
 
 ## Verify
 
@@ -93,10 +91,6 @@ this session's log for `--transcript`), and everything `mem` itself reads
 
 ## Notes and limits
 
-- `mem extract` is fired detached on every turn stop, but only does work when
-  `extract.enabled` is true (default false). The plugin passes the session id
-  and, when it can find it, the session log path; `mem extract` resolves a DSH
-  transcript from the session id alone otherwise.
 - The recall message is a normal user-role message tagged with source
   `memory`; it is persisted in the session log like any other injected context.
 - The plugin imports only Node builtins; it does not depend on

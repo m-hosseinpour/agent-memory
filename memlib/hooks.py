@@ -6,7 +6,7 @@ JSON object to stdout, nothing else:
     {"hookSpecificOutput": {"hookEventName": "SessionStart",
                             "additionalContext": "..."}}
 
-Only the two read events emit JSON. `stop` and `session-end` stay silent, and every
+Only the two read events emit JSON. `session-end` stays silent, and every
 failure path exits 0 with a message on stderr, because a broken hook must never
 break the agent's turn.
 
@@ -69,7 +69,6 @@ DISCLAIMER = (
 _EVENT_NAMES = {
     "session-start": "SessionStart",
     "user-prompt": "UserPromptSubmit",
-    "stop": "Stop",
     "session-end": "SessionEnd",
 }
 
@@ -83,17 +82,10 @@ def run(event, stdin=None, stdout=None) -> int:
         in_stream = sys.stdin if stdin is None else stdin
         out_stream = sys.stdout if stdout is None else stdout
         payload = _read_payload(in_stream)
-        # An extraction child (`claude -p` and friends) runs these same hooks.
-        # Doing nothing here breaks the extract → hook → extract chain; stdin is
-        # still drained above so the host never sees a broken pipe.
-        if os.environ.get(config.EXTRACT_CHILD_ENV):
-            return 0
         if event == "session-start":
             _session_start(payload, out_stream)
         elif event == "user-prompt":
             _user_prompt(payload, out_stream)
-        elif event == "stop":
-            _spawn_extract(payload)
         elif event == "session-end":
             _flush_state(payload)
         else:
@@ -361,12 +353,7 @@ def _as_int(value, default: int) -> int:
 
 
 # --------------------------------------------------------------------------
-# detached children: stop -> extract, session-start at the dream threshold
-
-
-def _spawn_extract(payload: dict) -> None:
-    """Start `mem extract` fully detached; never wait for it."""
-    _spawn(_extract_command(payload))
+# detached child: session-start at the dream threshold
 
 
 def _spawn_dream(cwd: str) -> None:
@@ -384,23 +371,6 @@ def _spawn(command: tuple[list[str], dict | None]) -> None:
         start_new_session=True,
         close_fds=True,
         env=env,
-    )
-
-
-def _extract_command(payload: dict) -> tuple[list[str], dict | None]:
-    transcript = payload.get("transcript_path")
-    return _launcher(
-        [
-            "extract",
-            "--transcript",
-            transcript if isinstance(transcript, str) else "",
-            "--agent",
-            AGENT,
-            "--session",
-            _session_id(payload) or "",
-            "--cwd",
-            _cwd(payload),
-        ]
     )
 
 

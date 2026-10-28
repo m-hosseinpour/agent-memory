@@ -23,7 +23,6 @@ REPO = Path(__file__).resolve().parent.parent
 HOOK_EVENTS = {
     "session-start": "SessionStart",
     "user-prompt": "UserPromptSubmit",
-    "stop": "Stop",
     "session-end": "SessionEnd",
 }
 CLI_EVENTS = {name: event for event, name in HOOK_EVENTS.items()}
@@ -193,35 +192,6 @@ class SessionStartTests(HookTestCase):
         self.assertNotIn("sk-", context)
 
 
-class ExtractChildTests(HookTestCase):
-    """Inside an extraction child every hook is inert: no index, no counter, no spawn.
-
-    `claude -p` used as `extract.command` loads these same hooks; without the marker
-    its Stop hook would start another extraction, and whose own Stop would start a
-    third. Nothing here may run in that child.
-    """
-
-    def setUp(self):
-        super().setUp()
-        os.environ[config.EXTRACT_CHILD_ENV] = "1"
-        self.addCleanup(os.environ.pop, config.EXTRACT_CHILD_ENV, None)
-
-    def test_session_start_injects_nothing_and_does_not_count(self):
-        code, text = self.run_hook("session-start", self.payload("session-start"))
-        self.assertEqual((code, text), (0, ""))
-        self.assertEqual(hooks.session_count(), 0)
-
-    def test_user_prompt_injects_nothing(self):
-        code, text = self.run_hook("user-prompt", self.payload("user-prompt"))
-        self.assertEqual((code, text), (0, ""))
-
-    def test_stop_spawns_nothing(self):
-        with mock.patch("memlib.hooks.subprocess.Popen") as popen:
-            code, text = self.run_hook("stop", self.payload("stop"))
-        self.assertEqual((code, text), (0, ""))
-        popen.assert_not_called()
-
-
 class UserPromptTests(HookTestCase):
     def test_silence_when_nothing_matches(self):
         self.write_config("[recall]\nselect_threshold = 1\ntop_k = 5\n")
@@ -384,39 +354,6 @@ class MalformedInputTests(HookTestCase):
         self.assertLessEqual(len(many_lines), hooks.MAX_CONTEXT_CHARS)
         self.assertTrue(many_lines.endswith("(truncated)"))
         self.assertEqual(hooks._truncate("short"), "short")
-
-
-class StopTests(HookTestCase):
-    def test_spawns_extract_detached_without_waiting(self):
-        payload = self.payload("stop", stop_hook_active=False)
-        process = mock.Mock()
-        with mock.patch("memlib.hooks.subprocess.Popen", return_value=process) as popen:
-            started = time.monotonic()
-            code, text = self.run_hook("stop", payload)
-            elapsed = time.monotonic() - started
-
-        self.assertEqual((code, text), (0, ""))
-        self.assertLess(elapsed, 0.5)
-        popen.assert_called_once()
-        command, kwargs = popen.call_args
-        args = command[0]
-        self.assertIn("extract", args)
-        self.assertEqual(args[args.index("--transcript") + 1], str(self.root / "transcript.jsonl"))
-        self.assertEqual(args[args.index("--session") + 1], "session-1")
-        self.assertEqual(args[args.index("--cwd") + 1], str(self.cwd))
-        self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
-        self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
-        self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
-        self.assertTrue(kwargs["start_new_session"])
-        process.wait.assert_not_called()
-
-    def test_spawn_failure_is_swallowed_and_logged_to_stderr(self):
-        with mock.patch("memlib.hooks.subprocess.Popen", side_effect=OSError("no exec")):
-            stderr = io.StringIO()
-            with mock.patch("sys.stderr", stderr):
-                code, text = self.run_hook("stop", self.payload("stop"))
-        self.assertEqual((code, text), (0, ""))
-        self.assertIn("mem hook", stderr.getvalue())
 
 
 class SubprocessTests(HookTestCase):

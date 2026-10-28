@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Shared markdown memory for the DeepSeek Harness: index notes in the system prompt, recall per prompt, extract on turn stop, and memory read/write/search tools.",
+  "description": "Shared markdown memory for the DeepSeek Harness: index notes in the system prompt, recall per prompt, and memory read/write/search tools.",
   "exports": {
     ".": "./index.js"
   },

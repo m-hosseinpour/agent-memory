@@ -6,8 +6,11 @@ start here with no other context.
 P2 was committed as `0b83b0d`, independently reviewed, and the review's findings were fixed
 in a follow-up commit (see "Review of P2 and what changed"). The store is installed and
 wired into all four agents — Claude Code, opencode, and the DSH plugin (linked into the
-`web` profile as a package and a selected bundle). The remaining work is a design decision
-(which model drives extraction), not an install step.
+`web` profile as a package and a selected bundle).
+
+**End-of-session extraction was removed on 2026-10-28** by the user's decision: Claude Code
+and Qoder have no such pass, and it was not wanted. `mem extract`, its transcript readers,
+the `Stop` hook and every adapter's detached spawn are gone; see "Extraction removed" below.
 
 The background documents now live in `docs/` in this repository; the old
 `~/.dsh/memory-system/` directory was migrated there and deleted.
@@ -30,16 +33,21 @@ The background documents now live in `docs/` in this repository; the old
 - `memlib/index.py`: `MEMORY.md` regenerated from files (grouped by type), budget capping
   (200 lines / 25KB).
 - `memlib/config.py`: root (`MEM_ROOT` or `~/.agents/memory`), `config.toml` subset
-  (`context.index_max_lines`, `recall.select_threshold`, `recall.top_k`, `extract.*`,
+  (`context.index_max_lines`, `recall.select_threshold`, `recall.top_k`,
   `dream.every_sessions`), scope directories.
 - `memlib/cli.py`: every subcommand is now implemented — `write`, `read`, `list`, `forget`,
-  `index`, `recall`, `hook`, `mcp`, `dream`, `extract`.
+  `index`, `recall`, `hook`, `mcp`, `dream` (an `extract` subcommand existed until
+  2026-10-28).
 - `tests/test_store.py`: 20 tests, all passing.
 
 ## Done in P1 — the four adapters
 
 All four were implemented, tested, and reviewed. `python3 -m unittest discover -s tests`
-ran 96 tests, all passing at that point (168 after P2). Files: `memlib/hooks.py`,
+ran 96 tests, all passing at that point (168 after P2).
+
+Note while reading the briefs below: everything they say about `mem extract` — the `stop`
+hook, DSH's `agent/turn-stopping` listener and opencode's `session.idle` subscription — was
+implemented and then removed on 2026-10-28. The briefs are kept as history, not as spec. Files: `memlib/hooks.py`,
 `memlib/mcp.py`, `integrations/opencode/`, `integrations/dsh/`, and three
 `install/*.json` fragments.
 
@@ -105,9 +113,10 @@ modify the four P0 modules without saying so.
 - Everything shells out to `mem`; no memory logic in the plugin.
 - Include `cordis.patch.yml` and a short README with the install steps.
 
-## Done in P2 — extraction and consolidation
+## Done in P2 — extraction (later removed) and consolidation
 
-`mem extract` and `mem dream` exist, so the adapters' detached calls now do something.
+`mem extract` and `mem dream` existed at that point; `mem extract` was removed on
+2026-10-28 and only `mem dream` remains.
 `python3 -m unittest discover -s tests` runs 168 tests, all passing.
 
 - **`memlib/dream.py`** — `mem dream`: session-counter gate (`dream.every_sessions`;
@@ -137,14 +146,14 @@ modify the four P0 modules without saying so.
   the install step below.
 
 Note on P0/P1 docs above: the "expected ImportError" comment and the P1 test count describe
-the tree as it was then. The suite is 185 tests now (the 7 added in `872d0bf` came after
+the tree as it was then. The suite is 149 tests now (the 7 added in `872d0bf` came after
 P2 and the counts in this file were not swept then).
 
 ## Install state (2026-10-28)
 
 Done, on this machine:
 
-- `~/.agents/memory` exists with `git init`, `PROTOCOL.md`, `config.toml` (extraction off)
+- `~/.agents/memory` exists with `git init`, `PROTOCOL.md`, `config.toml`
   and an empty `global/MEMORY.md`; bootstrap commit `0481121`.
 - `~/.agents/AGENTS.md` carries the "Shared memory" block from `install/agents-md.md`
   (Claude Code imports that file; opencode lists it in `instructions`).
@@ -168,43 +177,30 @@ Done, on this machine:
   no global one, so `git commit` failed and `mem dream` reported `commits: 0` while leaving
   the tree staged. `mem dream --force` now commits (`34841da`), the tree is clean, and a
   failed commit prints a warning instead of passing silently.
-- Extraction is **off** (`enabled = false`), as decided.
+- Extraction was removed from the repo on 2026-10-28; the store's `config.toml` no longer
+  has an `[extract]` section and no agent spawns anything on turn end.
 
 Still to do:
 
-1. **Turn extraction on** — the model question is answered by elimination; what is left is
-   accepting the recurring cost. `extract.command = "claude -p"` is the only workable
-   choice on this machine (`claude` 2.1.301 is installed and authenticated; `qoder` is
-   broken here; the aval-ai key is not in the environment). Set `enabled = true`,
-   `timeout = 60`, then read the first few notes it proposes and turn it off again if they
-   are noise.
-2. Optional, later: `mem eval` / `mem stats`, note-body search (recall is description-only).
+1. Optional, later: `mem eval` / `mem stats`, note-body search (recall is description-only).
 
-## Extraction readiness — checked against real sessions (2026-10-28)
+## Extraction removed (2026-10-28)
 
-The pipeline had never run outside the unit tests. It has now, with a deterministic stub
-command on this machine's real transcripts, with `MEM_ROOT` pointed at a scratch root:
+P2 had shipped `mem extract`: a detached pass that read the new tail of a session transcript,
+made one model call, and wrote the notes it proposed. It ran on the `Stop` hook (Claude
+Code), `agent/turn-stopping` (DSH) and `session.idle` (opencode), was off by default, and had
+just been validated against real transcripts of all three agents.
 
-- **All three readers work on real data**: DSH `session.v4.jsonl.zstd` (463 KB compressed →
-  2.4 MB decoded → 23 KB prompt), Claude Code `.jsonl`, and opencode's `session_message`
-  SQLite table (its real schema is `session_id`/`seq`/`type`/`data`, with the user text under
-  `data.text` and the assistant content under `data.content` — both match the reader).
-- Writes land in the project scope, `MEMORY.md` is rebuilt, `.state/extract.json` records a
-  per-transcript offset, an unchanged transcript is a no-op, and a name that already exists
-  is skipped (create-only, across both scopes). Missing `--session` on a SQLite transcript is
-  a clean `{"ok": false, "error": "transcript"}` with exit 1.
-- **A real `claude -p` extraction worked**: one note, 18.7 s, on this session's transcript.
+The user removed it: neither Claude Code nor Qoder runs such a pass — their memories are
+written by the agent through its own tools — and it was not wanted here. What went with it:
+`memlib/extract.py`, `tests/test_extract.py`, the `extract` subcommand, the `Stop` hook and
+its install fragment, the DSH and opencode listeners, `extract.*` config keys, and the
+`MEM_EXTRACT_CHILD` re-entry guard (it existed only to stop a `claude -p` extractor from
+recursing through our own hooks).
 
-Two bugs came out of that run, both fixed with tests:
-
-- **Extraction recursed through our own hooks.** `claude -p` loads `~/.claude/settings.json`,
-  so the child fired `SessionStart` (the counter went 1 → 2) and `Stop` (which spawns
-  `mem extract`). With extraction enabled, each child would spawn another and pay for it.
-  `mem extract` now exports `MEM_EXTRACT_CHILD` to the command, and `memlib/hooks.py`
-  returns before dispatch when it is set — stdin is still drained first.
-- **The 20 s command timeout was 1.3 s away from failing** a normal session-sized call. It is
-  now `extract.timeout` (default 20, clamped to 600); zstd decompression got its own
-  `DECOMPRESS_TIMEOUT` instead of borrowing the model's.
+Memories are now written only when an agent calls `memory_write` (or a human runs `mem
+write`); `mem dream` consolidates what exists. Do not re-add an automatic extraction pass
+without the user asking.
 
 ## Review of P2 and what changed
 
@@ -239,16 +235,11 @@ worth re-checking with `claude mcp list` after any MCP change.
 
 ## Decisions made in P2 (do not undo without a reason)
 
-- **Extraction is create-only.** The model sees names and descriptions, never bodies, so a
-  rewrite would be blind; an existing path is skipped. Updates go through `memory_write` or
-  dream.
 - **Dream's contradiction is identity, not semantics**: same type + same `name`, newer
   `modified` wins; duplicates are description overlap ≥ 0.8. No model call — consistent with
   the "no scoring formula" decision. Rename-and-contradict is not detected, on purpose.
 - **The dream trigger lives in the SessionStart hook**, not a daemon: the counter is bumped
   there anyway, and the lock makes repeated spawns harmless.
-- **A short extraction tail waits.** Under 200 rendered characters, no model call is made and
-  the offset does not move, so several small turns accumulate into one pass.
 
 ## Decisions already made (do not re-litigate without a reason)
 
@@ -257,7 +248,9 @@ worth re-checking with `claude mcp list` after any MCP change.
   Claude will not read from or write to the auto-memory directory"). `CLAUDE.md` text alone
   cannot remove a tool — it only steers.
 - **No candidate queue, no review queue, no SQLite, no scoring formula.** Writes are
-  immediate; quality control is the extraction prompt plus dream.
+  immediate; quality control is the agent's own judgement at write time plus dream.
+- **No automatic extraction.** The agent writes memories; nothing mines transcripts in the
+  background.
 - **Schema is Claude Code's schema.** Four types only (`user`, `feedback`, `project`,
   `reference`). No extra frontmatter fields.
 - **Recall is lexical** (token overlap on name+description) and only runs when the store is
@@ -277,17 +270,6 @@ worth re-checking with `claude mcp list` after any MCP change.
 
 ## Gotchas hit in P2
 
-- **DSH session files are zstd-compressed** (`session.v4.jsonl.zstd`) and live in
-  `~/.dsh/sessions/<project-key>/<session-dir>/`, where the directory is either
-  `session-<uuid>` or `<uuid>`. Read the first line to tell a DSH log from a Claude one: the
-  header is `{"type":"session", ...}`; events are `{"type":"user/message",...}` with the body
-  inside `data`. `zstd` decoding is `compression.zstd` (Python 3.14) or the `zstd` CLI — do
-  not add a dependency for it.
-- **opencode 2.x has no transcript file**: the plugin passes its SQLite database
-  (`~/.local/share/opencode/opencode.db`) and the session id; messages are rows of
-  `session_message(type, seq, data)` with JSON in `data`. Open it read-only.
-- **The Stop hook fires every turn**, which is why extraction keeps offsets. Do not "simplify"
-  it back to reading the whole transcript.
 - **`dream.log` and `.state/` are not memory.** They are gitignored on the first consolidation
   and untracked once if a store already committed them. That is what makes "two runs, no
   diff" true.

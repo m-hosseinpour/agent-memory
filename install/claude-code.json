@@ -21,16 +21,6 @@
         ]
       }
     ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/home/mahdi/workspace/agent-memory/bin/mem hook stop"
-          }
-        ]
-      }
-    ],
     "SessionEnd": [
       {
         "hooks": [

@@ -17,14 +17,17 @@ criteria).
 
 P0–P2 are implemented: the store, index, versioned writes, lexical recall, the CLI, the
 four adapters (Claude Code hooks, the MCP stdio server, the opencode V2 plugin, the DSH
-plugin), and the two background passes — `mem extract` (end-of-session extraction through a
-configurable command) and `mem dream` (session-counted consolidation, which the SessionStart
-hook spawns once the counter reaches `dream.every_sessions`).
+plugin), and one background pass — `mem dream` (session-counted consolidation, which the
+SessionStart hook spawns once the counter reaches `dream.every_sessions`).
+
+End-of-session extraction (`mem extract`) existed through P2 and was **removed**: neither
+Claude Code nor Qoder runs such a pass, and it was not wanted here. Nothing writes memories
+behind the agent's back now — the agent writes with `memory_write`, and `dream` only
+consolidates what is already there.
 
 The store is installed on this machine (`~/.agents/memory`) and wired into all four agents:
 Claude Code (hooks + MCP), opencode (plugin + MCP), and DSH, whose plugin is installed into
-the `web` profile as a linked package and a selected bundle. What is left is the open design
-decision — which model drives extraction — not code; `HANDOFF.md` tracks it.
+the `web` profile as a linked package and a selected bundle.
 
 ## Usage
 
@@ -48,8 +51,7 @@ EOF
 ./bin/mem hook session-start < payload.json   # Claude Code hook (JSON in, JSON out)
 ./bin/mem mcp                                 # MCP server on stdio
 
-# background passes
-./bin/mem extract --agent claude-code --session "$SESSION_ID" --transcript "$TRANSCRIPT"
+# consolidation
 ./bin/mem dream --cwd "$PWD"                  # consolidate global + this project
 ./bin/mem dream --all                         # every project scope
 ./bin/mem dream --force                       # ignore the session counter
@@ -70,35 +72,9 @@ index_max_lines = 200            # cap on the injected index block
 select_threshold = 40            # below this many memories, recall never runs
 top_k = 8
 
-[extract]
-enabled = false                  # default off; turn it on deliberately
-command = "claude -p"            # the model call: prompt on stdin, JSON on stdout
-timeout = 20                     # seconds for one call; agent CLIs need ~60
-model = ""                       # informational; the model belongs inside `command`
-
 [dream]
 every_sessions = 5               # session counter that triggers consolidation
 ```
-
-`mem extract` runs the command once, feeds it the new part of the transcript, and writes the
-memories it proposes. It is create-only: an existing file is skipped, never overwritten, and
-that check looks in the global scope too. Writes always go to the project scope — the model
-never sees note bodies, so it is not asked to guess "global"; a durable user preference is
-written there by the agent itself with `memory_write` (or `mem write --scope global`).
-The prompt asks for strict JSON, and every item still passes the normal secret scan and size
-cap. The command's working directory is the project.
-
-**Using an agent as the command** (`claude -p`, which is what this machine uses) has two
-consequences, both handled:
-
-- The child runs with `MEM_EXTRACT_CHILD=1` in its environment, and every hook of this tool
-  exits immediately when it sees that variable. Without it, the child's `Stop` hook would
-  spawn another extraction, whose own `Stop` would spawn a third — a chain of paid calls.
-  This is why extraction must go through `mem extract`, not a bare hook.
-- One real call on a session-sized tail took about 19 s, so the 20 s default is too tight for
-  an agent CLI. Set `timeout = 60` (or more; the call runs detached, so it costs no
-  latency). A timeout does not advance the offset, so the next turn would retry and pay
-  again — the reason to leave headroom.
 
 `mem dream` merges notes of the same type whose descriptions are near-identical, lets the
 newer of two notes with the same name *and* type replace the older, repairs `MEMORY.md`,
@@ -120,15 +96,14 @@ memlib/store.py      files, frontmatter, version tokens, conflicts, secret refus
 memlib/index.py      MEMORY.md generation and budget capping
 memlib/config.py     root, config.toml subset, scope directories
 memlib/cli.py        argparse surface
-memlib/hooks.py      Claude Code hook adapter + the session counter (dream, extract spawns)
+memlib/hooks.py      Claude Code hook adapter + the session counter (spawns dream)
 memlib/mcp.py        MCP stdio server: memory_read / memory_write / memory_search
 memlib/dream.py      consolidation: dedupe, replace, index repair, git commits
-memlib/extract.py    transcript readers + one model call + write-through
 PROTOCOL.md          the agent-facing contract (copied into the store root)
 docs/                research.md, design.md, roadmap.md — the background, kept in-repo
-tests/               unittest (stdlib only), 185 tests
-integrations/opencode/  opencode V2 plugin (session.idle, compaction hook)
-integrations/dsh/       cordis plugin (prompt section, pre-step, turn-stopping, tools)
+tests/               unittest (stdlib only), 149 tests
+integrations/opencode/  opencode V2 plugin (compaction hook)
+integrations/dsh/       cordis plugin (prompt section, pre-step, tools)
 install/             merge fragments: claude-code.json, mcp.json, opencode.json, agents-md.md
 ```
 
@@ -141,7 +116,6 @@ $MEM_ROOT/
 ├── global/{MEMORY.md,*.md}                  # user-wide facts and preferences
 ├── projects/<sanitized-path>/{MEMORY.md,*.md}
 ├── .state/state.json                        # session counter for `mem dream`
-├── .state/extract.json                      # per-transcript offsets for `mem extract`
 ├── .state/dream.lock                        # one consolidation at a time
 ├── dream.log                                # one line per consolidation
 └── .git/                                    # optional; `mem dream` commits to it
@@ -162,9 +136,7 @@ There is no package to install: `bin/mem` runs straight from this checkout.
    `~/.agents/AGENTS.md` — Claude Code already imports that file.
 4. Set `"autoMemoryEnabled": false` in `~/.claude/settings.json` so the native store does not
    run in parallel with this one.
-5. Extraction stays off until you pick a model: set `[extract] enabled = true` and
-   `command = "claude -p"` (or any command that reads the prompt on stdin and prints JSON).
-6. DSH: link `integrations/dsh` into `~/.dsh/plugins/memory`, register it with
+5. DSH: link `integrations/dsh` into `~/.dsh/plugins/memory`, register it with
    `dsh plugin --profile <name> add link:$HOME/.dsh/plugins/memory`, and restart — the
    details are in `integrations/dsh/README.md`. opencode has its own steps in
    `integrations/opencode/README.md` (copy `mem.js` into its plugins directory, merge
@@ -183,16 +155,12 @@ python3 -m unittest discover -s tests -v
   is cheap at this scale and makes drift impossible.
 - **`if_version` is mandatory** on write unless `--force` is passed: a blind overwrite is
   exactly what the token exists to prevent.
-- **Extraction is incremental.** The Stop hook fires on every turn, so `.state/extract.json`
-  remembers how far each transcript was already read; a short tail waits for the next turn
-  instead of buying a model call.
 - **Dream is deterministic.** It has no model: a "contradiction" is the same `name` and type,
   where the newer `modified` wins, and duplicates are notes of one type whose descriptions
   overlap by at least 80%. Rename-and-contradict is not detected; that is a deliberate
   trade-off, not an oversight.
 - **Runtime state is not memory.** `.state/` and `dream.log` are ignored by the store's
   repository; only notes and `MEMORY.md` are committed.
-- **Nothing to install.** The standard library only, plus two optional runtime companions:
-  `git` (for dream's commits; without it the pass still consolidates) and the `zstd` CLI
-  (only for DSH session logs on Python older than 3.14, which has `compression.zstd`).
+- **Nothing to install.** The standard library only, plus `git` as an optional companion for
+  dream's commits; without it the pass still consolidates.
 - When testing, set `MEM_ROOT` to a scratch directory. The default root is the real store.

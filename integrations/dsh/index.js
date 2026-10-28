@@ -7,7 +7,6 @@
  *   capped by `context.index_max_lines` inside the CLI);
  * - an `agent/pre-step` listener that appends `mem recall` lines for the
  *   claimed prompt, and appends nothing when recall returns nothing;
- * - an `agent/turn-stopping` listener that spawns `mem extract` detached.
  * Plus the `memory_read` / `memory_write` / `memory_search` tools.
  *
  * Deliberately imports only Node builtins. A DSH plugin resolves from the
@@ -17,9 +16,8 @@
  * not imported.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { accessSync, constants, existsSync, readdirSync } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -246,42 +244,6 @@ function recallMessage(lines) {
   });
 }
 
-/** DSH's home, matching the environment the harness itself uses. */
-function dshHome() {
-  const configured = process.env.DSH_HOME;
-  return typeof configured === 'string' && configured !== '' ? configured : join(homedir(), '.dsh');
-}
-
-/**
- * Locate this session's persisted log, if the store uses the JSONL backend.
- * `--transcript` is optional: `mem extract` also resolves a DSH session from
- * `--session` alone, so a miss here only means one more directory scan there.
- */
-function transcriptPath(sessionId) {
-  if (typeof sessionId !== 'string' || sessionId === '') return '';
-  const sessionsRoot = join(dshHome(), 'sessions');
-  try {
-    for (const key of readdirSync(sessionsRoot, { withFileTypes: true })) {
-      if (!key.isDirectory()) continue;
-      const directory = join(sessionsRoot, key.name, sessionId);
-      let entries;
-      try {
-        entries = readdirSync(directory, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const entry of entries) {
-        if (entry.isFile() && entry.name.startsWith('session.') && entry.name.includes('.jsonl')) {
-          return join(directory, entry.name);
-        }
-      }
-    }
-  } catch {
-    // No readable session store; extract gets its own chance to find one.
-  }
-  return '';
-}
-
 /**
  * Register the memory contributions.
  * @param {import('@deepseek-ai/cordis').Context} ctx - owning Host context.
@@ -335,24 +297,6 @@ export function apply(ctx, config = {}) {
     } catch (error) {
       ctx.logger.warn(`memory: recall skipped: ${String(error)}`);
       return decision;
-    }
-  });
-
-  ctx.on('agent/turn-stopping', ({ agent }) => {
-    try {
-      const cwd = sessionCwd(ctx, agent);
-      const args = ['extract', '--agent', 'dsh', '--cwd', cwd];
-      const sessionId = agent?.session?.id;
-      if (typeof sessionId === 'string' && sessionId !== '') args.push('--session', sessionId);
-      const transcript = transcriptPath(sessionId);
-      if (transcript !== '') args.push('--transcript', transcript);
-      const child = spawn(command, args, { cwd, env, detached: true, stdio: 'ignore' });
-      // A spawn failure surfaces as an asynchronous 'error' event; an unhandled
-      // one would take down the Host, and extraction must never do that.
-      child.on('error', () => {});
-      child.unref();
-    } catch (error) {
-      ctx.logger.warn(`memory: extract skipped: ${String(error)}`);
     }
   });
 

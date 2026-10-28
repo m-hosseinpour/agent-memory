@@ -12,19 +12,11 @@ from pathlib import Path
 
 DEFAULT_ROOT = "~/.agents/memory"
 
-# `mem extract` exports this to the model command. When the command is itself an
-# agent with our hooks installed (`claude -p` is the obvious one), that child's
-# hooks see the variable and do nothing. Without it the child's Stop hook would
-# spawn another extraction whose own Stop spawns another — an unbounded chain of
-# paid model calls, because each child session yields a transcript with new turns.
-EXTRACT_CHILD_ENV = "MEM_EXTRACT_CHILD"
-
 # Section -> key -> default. Unknown keys are ignored rather than fatal: a
 # config written for a later version should not break an older binary.
 DEFAULTS: dict[str, dict[str, object]] = {
     "context": {"index_max_lines": 200},
     "recall": {"select_threshold": 40, "top_k": 8},
-    "extract": {"enabled": False, "model": "", "command": "", "timeout": 20},
     "dream": {"every_sessions": 5},
 }
 

@@ -259,11 +259,6 @@ class RootOverrideTests(CliTestCase):
 
 
 class AdapterEntryPointTests(CliTestCase):
-    def test_extract_is_quiet_when_disabled_even_without_a_transcript(self):
-        code, data = self.json_cli("extract")
-        self.assertEqual(code, 0)
-        self.assertEqual(data["reason"], "disabled")
-
     def test_dream_below_the_threshold_is_a_no_op_json(self):
         code, data = self.json_cli("dream", "--cwd", str(self.cwd))
         self.assertEqual(code, 0)

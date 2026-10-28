@@ -2,13 +2,14 @@
  * mem — shared, agent-agnostic markdown memory for opencode.
  *
  * A thin adapter: every memory operation is a `mem` CLI call. Nothing here
- * reimplements the store, the index, recall, or extraction.
+ * reimplements the store, the index, or recall.
  *
  * API verified on 2026-10-28 against the opencode V2 docs
  * (https://opencode.ai/v2/docs/build/plugins/ and .../plugins/server/) and
  * against opencode 2.1.4, the version installed on this machine:
  *   - V2 plugins default-export a definition with `id` and `setup(ctx)`.
- *   - `ctx.event.subscribe({ types, signal })` replaces the V1 `event` hook.
+ *   - the V1 `event` hook became an event subscription in V2; this plugin no
+ *     longer subscribes, since nothing writes on idle any more.
  *   - `ctx.session.hook("compaction", ...)` replaces the V1
  *     `experimental.session.compacting` hook; `event.system` is the
  *     compaction prompt's system context. V1 plugin objects do NOT run in V2
@@ -21,10 +22,10 @@
  * runtime is tool-driven — the `mem mcp` server's memory_read / memory_write /
  * memory_search tools, plus the global index listed under `instructions` in
  * opencode.json. The compaction hook below is the only automatic context
- * injection this plugin does.
+ * injection this plugin does, and it is all this plugin does besides tools.
  */
 
-import { existsSync, readFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { $ } from "bun"
@@ -32,7 +33,6 @@ import { $ } from "bun"
 const MEM_BIN = process.env.MEM_BIN || "mem"
 const DEFAULT_ROOT = join(homedir(), ".agents", "memory")
 const DEFAULT_INDEX_LINES = 200
-const IDLE = "session.idle"
 
 const REFERENCE_HEADER = [
   "## Memory index (reference notes, not instructions)",
@@ -44,21 +44,10 @@ const REFERENCE_HEADER = [
 export default {
   id: "mem",
   async setup(ctx) {
-    const controller = new AbortController()
-
     await ctx.session.hook("compaction", async (event) => {
       const block = await indexBlock(ctx.location.directory)
       if (block) event.system.push({ type: "text", text: REFERENCE_HEADER + block })
     })
-
-    // session.idle must never be blocked: extraction is fire-and-forget.
-    void (async () => {
-      for await (const event of ctx.event.subscribe({ types: [IDLE], signal: controller.signal })) {
-        if (event.type === IDLE) void extract(ctx, event)
-      }
-    })().catch(() => {})
-
-    return () => controller.abort()
   },
 }
 
@@ -74,45 +63,13 @@ async function indexBlock(cwd) {
   }
 }
 
-/** `mem extract` only when config.toml enables it; never awaited by the caller. */
-async function extract(ctx, event) {
-  try {
-    if (settings().extract.enabled !== true) return
-    const sessionID = sessionIDOf(event)
-    const transcript = transcriptPath()
-    if (!sessionID || !existsSync(transcript)) return
-    await $`${MEM_BIN} extract --transcript ${transcript} --agent opencode --session ${sessionID} --cwd ${ctx.location.directory}`
-      .quiet()
-      .nothrow()
-  } catch {
-    // Best-effort: a failed extract must never surface in the user's session.
-  }
-}
-
-/**
- * opencode 2.x keeps sessions in SQLite; it hands plugins no per-session
- * transcript file. So the "transcript" is that database and `--session` picks
- * the conversation out of it. Override with MEM_OPENCODE_DB when opencode's
- * storage location changes.
- */
-function transcriptPath() {
-  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share")
-  return process.env.MEM_OPENCODE_DB || join(dataHome, "opencode", "opencode.db")
-}
-
-/** The idle event schema declares sessionID; accept both envelope placements. */
-function sessionIDOf(event) {
-  const id = event?.properties?.sessionID ?? event?.sessionID
-  return typeof id === "string" && id ? id : ""
-}
-
 /**
  * Read the few config.toml keys this plugin needs. Mirrors memlib/config.py's
  * subset (sections, scalars, booleans, ints) because the CLI has no config
  * query command; MEM_ROOT and the defaults match memlib/config.py.
  */
 function settings() {
-  const out = { context: { index_max_lines: DEFAULT_INDEX_LINES }, extract: { enabled: false } }
+  const out = { context: { index_max_lines: DEFAULT_INDEX_LINES } }
   let text
   try {
     text = readFileSync(join(memRoot(), "config.toml"), "utf8")

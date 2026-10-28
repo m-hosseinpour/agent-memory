@@ -182,17 +182,6 @@ def cmd_dream(args) -> int:
     return dream.run(force=args.force, cwd=args.cwd, all_scopes=args.all)
 
 
-def cmd_extract(args) -> int:
-    from . import extract
-
-    return extract.run(
-        transcript=args.transcript,
-        agent=args.agent,
-        session=args.session,
-        cwd=args.cwd,
-    )
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mem", description="Agent-agnostic memory store")
     parser.add_argument("--root", help="override the memory root (default ~/.agents/memory)")
@@ -242,7 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
     recall.set_defaults(func=cmd_recall)
 
     hook = sub.add_parser("hook", help="run as an agent hook (JSON on stdin)")
-    hook.add_argument("event", choices=["session-start", "user-prompt", "stop", "session-end"])
+    hook.add_argument("event", choices=["session-start", "user-prompt", "session-end"])
     hook.set_defaults(func=cmd_hook)
 
     sub.add_parser("mcp", help="serve MCP over stdio").set_defaults(func=cmd_mcp)
@@ -252,13 +241,6 @@ def build_parser() -> argparse.ArgumentParser:
     dream.add_argument("--all", action="store_true", help="every project, not just this one")
     dream.add_argument("--force", action="store_true", help="ignore the session counter")
     dream.set_defaults(func=cmd_dream)
-
-    extract = sub.add_parser("extract", help="extract memories from a finished session")
-    extract.add_argument("--transcript", default="")
-    extract.add_argument("--agent", default="unknown")
-    extract.add_argument("--session", default="")
-    extract.add_argument("--cwd", default=".")
-    extract.set_defaults(func=cmd_extract)
 
     return parser
 
