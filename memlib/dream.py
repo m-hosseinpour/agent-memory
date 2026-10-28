@@ -10,9 +10,10 @@ What a pass does:
 
 * two files of the same type with the same `name` are one note — the newer
   `modified` wins and the older file is removed (its body is *not* merged);
-* two files of the same type whose descriptions use exactly the same words are
-  duplicates — the older's unique lines are appended to the newest and the
-  older file is removed; a restatement in other words stays a separate note;
+* two files of the same type whose one-line descriptions use the same words
+  are duplicates — the older's unique lines are appended to the newest and the
+  older file is removed; a restatement in other words, or a description longer
+  than the line the threshold is tuned for, stays a separate note;
 * `MEMORY.md` is rebuilt from the files, so a line for a deleted file cannot
   survive.
 
@@ -40,15 +41,19 @@ from pathlib import Path
 
 from . import config, index, store
 
-# Two notes share a description only when they use exactly the same words.
-# A lower cut-off cannot tell a restatement from a narrowed one: one added
-# qualifier keeps Jaccard at 0.86 ("deploy with make release and tag" vs
-# "... tag blue", "run unit tests before every commit" vs "... only") and
-# would delete an independent note. Word overlap alone cannot tell a filler
-# word ("use pnpm not npm") from a qualifier, so identity is the only safe
-# rule. Jaccard rather than string equality, so word order and punctuation
-# do not matter.
-DUPLICATE_THRESHOLD = 1.0
+# Two notes merge only when their descriptions use the same words, and only
+# while a description is one line of the index. A restatement with one added
+# qualifier scored 0.86 at the old 0.8 cut-off ("deploy with make release and
+# tag" vs "... tag blue") and the older, independent note was deleted. Word
+# overlap cannot tell a filler word ("use pnpm not npm") from a qualifier, so
+# the cut-off is put where only the same words can reach it: for n distinct
+# words a pair that differs at all scores at most (n-1)/n, so 0.95 separates
+# them up to 19 words (18/19 = 0.947, 19/20 = 0.95). Beyond that the same
+# number would start accepting a qualifier, so a longer description is left
+# alone instead of guessed at. Jaccard rather than string equality, so word
+# order and punctuation do not matter.
+DUPLICATE_THRESHOLD = 0.95
+DUPLICATE_WORDS = 19
 
 
 @dataclass
@@ -259,8 +264,11 @@ def _repair_index(directory: Path) -> int:
 
 
 def _similar(first: str, second: str) -> bool:
+    """Whether two descriptions are the same note, judged only up to one line."""
     left, right = store.tokens(first), store.tokens(second)
     if not left or not right:
+        return False
+    if len(left) > DUPLICATE_WORDS or len(right) > DUPLICATE_WORDS:
         return False
     return len(left & right) / len(left | right) >= DUPLICATE_THRESHOLD
 

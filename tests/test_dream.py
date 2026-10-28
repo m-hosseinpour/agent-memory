@@ -180,6 +180,26 @@ class MergeTests(DreamTestCase):
         self.assertFalse(dream._similar("", "release tag"))
         self.assertFalse(dream._similar("", ""))
 
+    def test_the_threshold_is_only_safe_up_to_its_word_ceiling(self):
+        # 0.95 is exactly the point where one added word to a 19-word
+        # description reaches the threshold, so 19 is the largest size the
+        # number can cover; the ceiling and the number have to move together.
+        ceiling = dream.DUPLICATE_WORDS
+        self.assertLess((ceiling - 1) / ceiling, dream.DUPLICATE_THRESHOLD)
+        self.assertLessEqual(ceiling / (ceiling + 1), dream.DUPLICATE_THRESHOLD)
+
+    def test_a_description_past_the_ceiling_is_never_merged(self):
+        # Above the ceiling the same number would accept a qualifier, so the
+        # pass declines instead of guessing: two identical long descriptions
+        # stay apart rather than risk deleting an independent note.
+        long = " ".join(f"word{number}" for number in range(dream.DUPLICATE_WORDS + 1))
+        self.assertFalse(dream._similar(long, long))
+        self.put("project", "a.md", "one", long, modified=OLD)
+        self.put("project", "b.md", "two", long, modified=NEW)
+        _, out = self.run_dream()
+        self.assertEqual(out["merged"], 0)
+        self.assertEqual(self.files(), ["MEMORY.md", "a.md", "b.md"])
+
     def test_dissimilar_descriptions_are_kept_apart(self):
         self.put("project", "a.md", "one", "the lockfile is pnpm", modified=OLD)
         self.put("project", "b.md", "two", "chromium poisons fontconfig", modified=NEW)

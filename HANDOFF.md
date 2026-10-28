@@ -10,7 +10,7 @@
 ## نقطهٔ شروع
 
 - نسخه ۰.۲.۰؛ وضعیت HEAD و working tree را با `git log -1` و `git status` ببینید.
-- تست پایه: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v` → ۱۲۳ تست سبز.
+- تست پایه: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v` → ۱۲۵ تست سبز.
   pytest نصب نیست و لازم هم نیست؛ تست‌های تازه را در همان فایل‌های موجود و با `unittest` بنویسید.
 - تصمیم‌های بسته در `docs/design.md` §۱۱ هستند؛ بدون دلیل تازه بازشان نکنید.
 - روش کار: اول بازتولید، بعد اصلاح، بعد همان بازتولید و همان تست‌ها دوباره. اگر تغییری رفتار

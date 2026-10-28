@@ -109,15 +109,20 @@ returning. The rules are deterministic — no model call:
 
 - two files of the same type with the same `name` are one note; the newer `modified` wins and
   the older file is removed (its body is **not** merged);
-- two files of the same type whose descriptions use exactly the same words (word Jaccard 1.0, so
-  word order and punctuation do not matter) are duplicates: the older's unique lines are appended
-  to the newest body, then the older file is removed;
+- two files of the same type whose descriptions use the same words are duplicates: word Jaccard
+  0.95 over one-line descriptions (at most 19 distinct words), where only an identical word set
+  can reach it. The older's unique lines are appended to the newest body, then the older file is
+  removed; a description longer than one line is never merged on similarity;
 - `MEMORY.md` is rebuilt from the files, so a line for a deleted file cannot survive.
 
 A pass deletes a file only while its bytes still match what it read, and writes a merged keeper
 with the version it read, so a concurrent agent either wins cleanly or leaves both files for the
 next pass. The pass is idempotent: running it twice changes nothing. `mem dream` runs it by hand
 (`--all` for every project).
+
+A description longer than one line is not compared for similarity at all: above 19 words the same
+0.95 would begin to accept a qualifier, so two notes that long are left apart rather than guessed
+at (the same-`name` rule still applies).
 
 A restatement in other words is **not** merged, and rename-and-contradict is **not** detected —
 the same fact under a different `name` or in a differently worded `description` stays as two
