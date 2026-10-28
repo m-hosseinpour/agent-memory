@@ -13,7 +13,13 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 - Every `mem` command in a test or a check needs `MEM_ROOT=$(mktemp -d)`. The real store is
   `~/.agents/memory` and must not be touched.
 - `./bin/mem` runs the checkout. `mem` on `PATH` is the installed copy and may be stale; to run the
-  new code there you need `uv tool install --reinstall .`, but ask the user first.
+  new code there you need `uv tool install --reinstall .` (see below).
+
+## Install
+
+- If the tool is installed on this machine (`uv tool list` lists it), run
+  `uv tool install --reinstall .` after every code change, so the `mem` on `PATH` that the agents
+  call runs the new code.
 
 ## Documents
 
