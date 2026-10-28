@@ -1,43 +1,44 @@
 # AGENTS.md
 
-فقط چیزهایی که یک سشن تازه بدون آن‌ها کار را خراب می‌کند. جزئیات در `docs/`.
+Only what a fresh session needs in order not to break something. Details live in `docs/`.
 
-## تست
+## Tests
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 ```
 
-- pytest نصب نیست و لازم هم نیست؛ تست تازه در همان چهار فایل `tests/` و با `unittest` نوشته شود.
-- هر دستور `mem` در تست یا بررسی، `MEM_ROOT=$(mktemp -d)` می‌خواهد. انبار واقعی
-  `~/.agents/memory` است و نباید دست بخورد.
-- `./bin/mem` همان کد چک‌اوت است. `mem` روی `PATH` نسخهٔ نصب‌شده است و می‌تواند کهنه باشد؛ برای
-  اجرای کد تازه `uv tool install --reinstall .` لازم است، ولی قبلش از کاربر بپرسید.
+- pytest is neither installed nor needed; new tests go in the four existing files under `tests/`
+  and use `unittest`.
+- Every `mem` command in a test or a check needs `MEM_ROOT=$(mktemp -d)`. The real store is
+  `~/.agents/memory` and must not be touched.
+- `./bin/mem` runs the checkout. `mem` on `PATH` is the installed copy and may be stale; to run the
+  new code there you need `uv tool install --reinstall .`, but ask the user first.
 
-## مستندات
+## Documents
 
-| فایل | نقش |
+| File | Role |
 |---|---|
-| `README.md` | معرفی، نصب، سیم‌کشی ایجنت‌ها (انگلیسی) |
-| `docs/design.md` | طرح و گزینه‌های کنارگذاشته‌شده؛ §۱۱ تصمیم‌های بسته |
-| `docs/operations.md` | وضعیت و راه‌اندازی این ماشین |
-| `HANDOFF.md` | سفارش کارهای باز؛ بعد از تمام‌شدن حذف یا بازنویسی شود |
-| `docs/research.md` | پژوهش تاریخی دربارهٔ Claude Code و Qoder |
+| `README.md` | intro, install, agent wiring |
+| `PROTOCOL.md` | hand-written connectivity guide for agents without an MCP client |
+| `docs/design.md` | the design and rejected options; §11 is the closed decisions |
+| `docs/operations.md` | this machine's state and setup |
+| `docs/roadmap.md` | history of what shipped |
+| `HANDOFF.md` | the open work order; delete or rewrite it when done |
+| `docs/research.md` | historical research on Claude Code and Qoder |
 
-- همه فارسی‌اند جز README؛ پاسخ‌ها هم فارسی.
-- هر تغییر رفتار را در همان کار در README و `docs/` به‌روز کنید، نه در کامیت بعدی.
-- §۱۱ `design.md` را بدون دلیل تازه باز نکنید: بدون جست‌وجوی کلیدواژه، بدون سقف خط روی ایندکس،
-  بدون فایل تنظیمات، MCP-only، تثبیت بعد از هر تغییر.
+- README and PROTOCOL are English; everything else is Persian, and so are the answers to the user.
+- Update README and `docs/` in the same change that alters behaviour, not in a later commit.
+- Do not reopen §11 of `design.md` without a new reason: no keyword search, no line cap on the
+  index, no config file, MCP-only, consolidation after every change.
 
-## کد
+## Code
 
-- Python ≥ 3.11، فقط کتابخانهٔ استاندارد؛ وابستگی تازه اضافه نکنید.
-- `memlib/` تنها بستهٔ کد است و `bin/mem` فقط launcher؛ CLI و MCP هر دو از `memlib.store` استفاده
-  می‌کنند، پس یک منطق را دو جا نسازید.
+- Python ≥ 3.11, standard library only; do not add dependencies.
+- `memlib/` is the only code package and `bin/mem` is just a launcher. CLI and MCP both go through
+  `memlib.store`, so do not build the same logic twice.
 
-## گیت
+## Git
 
-- پیام کامیت انگلیسی و امری؛ بدنهٔ کوتاه «چرا» را بگوید، نه «چه».
-- **بعد از هر کامیت، پوش هم انجام شود** — این مخزن origin با دو مقصد push دارد (Forgejo و GitHub)
-  و کامیت بدون push ناتمام است.
-- merge، rebase و حذف شاخه فقط با درخواست صریح کاربر.
+- Push after every commit.
+- Merge, rebase, and branch deletion only on an explicit request from the user.
