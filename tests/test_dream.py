@@ -139,6 +139,30 @@ class MergeTests(DreamTestCase):
         self.assertIn("second detail", body)
         self.assertIn("first detail", body)
 
+    def test_appended_lines_keep_their_paragraph_breaks(self):
+        # Dropping the blank lines between the older note's paragraphs glued
+        # unrelated statements into one block.
+        self.put(
+            "project", "a.md", "one", self.DESCRIPTION,
+            body="older first\n\nolder second", modified=OLD,
+        )
+        self.put("project", "b.md", "two", self.DESCRIPTION, body="keeper", modified=NEW)
+        self.run_dream()
+        body = store.load(self.directory() / "b.md").body
+        self.assertEqual(body, "keeper\n\nolder first\n\nolder second")
+
+    def test_a_line_the_duplicate_repeats_is_copied_as_written(self):
+        # Filtering is against the keeper, not against the duplicate itself:
+        # a fenced block or a rule repeated line-for-line must survive intact.
+        self.put(
+            "project", "a.md", "one", self.DESCRIPTION,
+            body="```\nrun\nrun\n```", modified=OLD,
+        )
+        self.put("project", "b.md", "two", self.DESCRIPTION, body="keeper", modified=NEW)
+        self.run_dream()
+        body = store.load(self.directory() / "b.md").body
+        self.assertEqual(body, "keeper\n\n```\nrun\nrun\n```")
+
     def test_a_narrowing_qualifier_is_not_merged(self):
         # Each pair of descriptions shares nearly every word. At the old 0.8
         # cut-off the older note was deleted and its title lost without a
@@ -229,6 +253,23 @@ class MergeTests(DreamTestCase):
 
 
 class IndexRepairTests(DreamTestCase):
+    def test_one_pass_rebuilds_the_index_once(self):
+        self.put("project", "a.md", "a", "d")
+        with mock.patch.object(index, "rebuild", wraps=index.rebuild) as rebuild:
+            dream.after_change(self.directory())
+        self.assertEqual(rebuild.call_count, 1)
+
+    def test_a_pass_that_raises_still_rebuilds_the_index(self):
+        self.put("project", "a.md", "a", "d")
+        stderr = io.StringIO()
+        with mock.patch.object(
+            dream, "_merge_duplicates", side_effect=RuntimeError("boom")
+        ):
+            with redirect_stderr(stderr):
+                dream.after_change(self.directory())
+        self.assertIn("consolidation skipped", stderr.getvalue())
+        self.assertIn("a.md", (self.directory() / "MEMORY.md").read_text())
+
     def test_a_line_for_a_gone_file_is_removed_and_counted(self):
         path = self.put("project", "a.md", "a", "d")
         index.rebuild(self.directory())

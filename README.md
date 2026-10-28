@@ -185,8 +185,11 @@ python3 -m unittest discover -s tests -v
 - **`name` and `description` are one line.** A line break in either is refused before anything
   is written: the frontmatter is parsed line by line, so a value with a break would be cut there.
   Multiple lines belong in the body.
-- **Schema is Claude Code's**: four types (`user`, `feedback`, `project`, `reference`), the same
-  frontmatter keys. No extra fields.
+- **Schema is Claude Code's, minus session provenance.** Four types (`user`, `feedback`,
+  `project`, `reference`) and the same frontmatter shape, but no `originSessionId`: no client
+  hands the tool a session id, so the field was always empty and claimed a provenance the store
+  could not have. Notes another tool wrote with that field are still read; the next rewrite drops
+  it, while other metadata keys another tool added are left alone.
 - **Concurrency rests on the version token, held under a short-lived lock.** `write` and `delete`
   take an `flock` on the scope directory for the read-check-replace, because a token check
   without a lock is check-then-act: two writers holding the same token would both pass. The lock

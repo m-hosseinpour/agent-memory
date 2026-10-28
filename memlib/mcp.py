@@ -33,8 +33,12 @@ from . import __version__, config, dream, index, store
 SERVER_NAME = "mem"
 SERVER_TITLE = "mem — agent-agnostic markdown memory"
 
-# Verified against the MCP lifecycle spec: the last handshake-based revision
-# is 2025-11-25; 2026-07-28 replaced initialize with per-request _meta.
+# Protocol versions from the MCP specification. The last handshake-based
+# revision is 2025-11-25:
+#   https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle
+# Revision 2026-07-28 has no negotiation handshake — the version rides on every
+# request — and answers server/discover instead:
+#   https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning
 LATEST_PROTOCOL_VERSION = "2025-11-25"
 PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")
 
@@ -148,7 +152,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "name": "memory_write",
             "description": (
                 "Create or replace one memory document in the shared store. Writes "
-                "the markdown file, refreshes the index and consolidates the store "
+                "the markdown file, consolidates the store and refreshes the index "
                 "in the same call, and returns the new version. if_version is "
                 "required: pass the version from memory_read, or 'new' to create a "
                 "file that must not exist yet. If the file changed since it was "

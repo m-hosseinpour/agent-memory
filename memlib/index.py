@@ -18,13 +18,13 @@ from pathlib import Path
 from .store import TYPES, Memory, list_memories
 
 
-def line_for(memory: Memory, prefix: str = "") -> str:
-    target = f"{prefix}{memory.filename}"
+def line_for(memory: Memory) -> str:
+    target = memory.filename
     description = memory.description.strip()
     return f"- [{memory.title}]({target}) — {description}" if description else f"- [{memory.title}]({target})"
 
 
-def render(memories: list[Memory], prefix: str = "") -> str:
+def render(memories: list[Memory]) -> str:
     """Grouped index text: one section per type, newest first inside a section."""
     if not memories:
         return ""
@@ -33,15 +33,15 @@ def render(memories: list[Memory], prefix: str = "") -> str:
         group = [m for m in memories if m.type == memory_type]
         if not group:
             continue
-        body = "\n".join(line_for(m, prefix) for m in group)
+        body = "\n".join(line_for(m) for m in group)
         sections.append(f"## {memory_type} ({len(group)})\n{body}")
     return "\n\n".join(sections)
 
 
-def rebuild(directory: Path, prefix: str = "") -> str:
+def rebuild(directory: Path) -> str:
     """Rewrite MEMORY.md from the files on disk and return the new text."""
     directory.mkdir(parents=True, exist_ok=True)
-    text = render(list_memories(directory), prefix)
+    text = render(list_memories(directory))
     header = "# Memory\n\n" if text else "# Memory\n\n_empty_\n"
     target = directory / "MEMORY.md"
     # Atomic: another process may be reading the index while this one repairs

@@ -46,7 +46,6 @@ def cmd_write(args) -> int:
         description=args.description,
         memory_type=args.type,
         if_version=args.if_version,
-        session_id=args.session,
         force=args.force,
     )
     # The change is consolidated before the command returns: no queued state
@@ -183,7 +182,6 @@ def build_parser() -> argparse.ArgumentParser:
     write.add_argument("--content", help="body text, or - for stdin")
     write.add_argument("--content-file", help="read the body from a file")
     write.add_argument("--if-version", dest="if_version", help="version from read, or 'new'")
-    write.add_argument("--session", help="origin session id, for provenance")
     write.add_argument("--force", action="store_true", help="skip the version check")
     write.set_defaults(func=cmd_write)
 

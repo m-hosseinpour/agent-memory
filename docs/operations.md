@@ -14,7 +14,7 @@
   فایل‌ها از نو می‌سازد. `mem index` نسخهٔ زندهٔ هر دو scope را چاپ می‌کند. ویرایش دستی
   `MEMORY.md` ماندگار نیست.
 - فایل هر یادداشت: frontmatter با `name`، `description` و
-  `metadata.{node_type,type,originSessionId,modified}`، سپس بدنه. یک یادداشت در هر فایل،
+  `metadata.{node_type,type,modified}`، سپس بدنه. یک یادداشت در هر فایل،
   نام فایل تخت و با پسوند `.md`؛ `MEMORY.md` نام مجاز نیست و `mem read` هم آن را نمی‌خواند
   (`mem index` جای آن است).
 

@@ -1,9 +1,10 @@
 """Filesystem store for agent memories.
 
 One memory = one markdown file with a YAML-ish frontmatter block holding
-`name`, `description` and `metadata.{node_type,type,originSessionId,modified}`.
-That shape is deliberately identical to Claude Code's memory files, so the
-same directory stays readable by hand, by `grep`, and by other agents.
+`name`, `description` and `metadata.{node_type,type,modified}`. The shape is
+Claude Code's minus its `originSessionId` (design §11: this server has no
+reliable session identity, so an empty provenance field would only lie). The
+files stay readable by hand, by `grep`, and by other agents.
 """
 
 from __future__ import annotations
@@ -158,11 +159,11 @@ def render(meta: dict, body: str) -> str:
     metadata = meta.get("metadata") or {}
     if metadata:
         lines.append("metadata:")
-        for key in ("node_type", "type", "originSessionId", "modified"):
+        for key in ("node_type", "type", "modified"):
             if key in metadata:
                 lines.append(f"  {key}: {_quote(str(metadata[key]))}")
         for key, value in metadata.items():
-            if key not in ("node_type", "type", "originSessionId", "modified"):
+            if key not in ("node_type", "type", "modified"):
                 lines.append(f"  {key}: {_quote(str(value))}")
     for key, value in meta.items():
         if key in ("name", "description", "metadata"):
@@ -182,7 +183,6 @@ class Memory:
     version: str
     modified: str
     meta: dict = field(default_factory=dict)
-    size: int = 0
 
     @property
     def filename(self) -> str:
@@ -223,7 +223,6 @@ def load(path: Path) -> Memory:
         version=version_of(data),
         modified=modified,
         meta=meta,
-        size=len(data),
     )
 
 
@@ -282,7 +281,6 @@ def write(
     description: str | None = None,
     memory_type: str | None = None,
     if_version: str | None = None,
-    session_id: str | None = None,
     force: bool = False,
 ) -> Memory:
     """Create or replace one memory, enforcing optimistic concurrency.
@@ -297,8 +295,8 @@ def write(
     caller passes a different value. For a new file they fall back to the
     filename stem, an empty description and `project`. An explicit empty
     description clears it; a blank name falls back instead of blanking the file.
-    `name`, `description` and `session_id` must be one line: the frontmatter
-    is parsed line by line, so a line break is refused before anything is written.
+    `name` and `description` must be one line: the frontmatter is parsed line
+    by line, so a line break is refused before anything is written.
     """
     check_filename(filename)
     # Refuse before touching the directory: a rejected write must leave no file
@@ -307,8 +305,6 @@ def write(
         _single_line(name, "name")
     if description is not None:
         _single_line(description, "description")
-    if session_id is not None:
-        _single_line(session_id, "session id")
     if if_version is None and not force:
         raise StoreError("if_version is required (pass the version from read, or 'new')")
 
@@ -361,11 +357,14 @@ def write(
             )
 
         metadata = dict((existing.meta.get("metadata") if existing else {}) or {})
+        # A file written by another tool may still carry provenance this store
+        # no longer records; writing keeps only the managed keys' values, so the
+        # field goes rather than surviving as half-kept state.
+        metadata.pop("originSessionId", None)
         metadata.update(
             {
                 "node_type": "memory",
                 "type": final_type,
-                "originSessionId": session_id or metadata.get("originSessionId", ""),
                 "modified": now_iso(),
             }
         )

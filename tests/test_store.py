@@ -91,6 +91,19 @@ class WriteTests(unittest.TestCase):
         with self.assertRaises(store.StoreError):
             store.write(self.dir, "a.md", "   \n", if_version="new")
 
+    def test_a_body_past_the_cap_is_refused(self):
+        with self.assertRaises(store.StoreError):
+            store.write(
+                self.dir, "big.md", "x" * (store.MAX_BODY_BYTES + 1), if_version="new"
+            )
+        self.assertFalse((self.dir / "big.md").exists())
+
+    def test_a_body_at_the_cap_is_accepted(self):
+        memory = store.write(
+            self.dir, "big.md", "x" * store.MAX_BODY_BYTES, if_version="new"
+        )
+        self.assertEqual(len(memory.body.encode("utf-8")), store.MAX_BODY_BYTES)
+
     def test_bad_filename_is_refused(self):
         for name in ("../x.md", "x.txt", "MEMORY.md"):
             with self.assertRaises(store.StoreError):
@@ -119,11 +132,37 @@ class WriteTests(unittest.TestCase):
                         )
                     self.assertFalse((self.dir / "a.md").exists())
 
-    def test_a_line_break_in_the_session_id_is_refused(self):
-        # originSessionId is a frontmatter scalar too, so it breaks the same way.
-        with self.assertRaises(store.StoreError):
-            store.write(self.dir, "a.md", "body", session_id="a\nb", if_version="new")
-        self.assertFalse((self.dir / "a.md").exists())
+    def test_a_note_carries_no_session_field(self):
+        # originSessionId was inherited from Claude Code but never filled in:
+        # the MCP tool has no session argument, so the field stayed empty and
+        # claimed a provenance the store could not have (design §11).
+        store.write(self.dir, "a.md", "body", if_version="new")
+        self.assertNotIn("originSessionId", (self.dir / "a.md").read_text())
+
+    def test_a_rewrite_drops_a_session_field_from_another_tool(self):
+        # A file another tool wrote stays readable with the field, but a rewrite
+        # drops it (other metadata keys are left alone).
+        path = self.dir / "a.md"
+        path.write_text(
+            store.render(
+                {
+                    "name": "a",
+                    "description": "d",
+                    "metadata": {
+                        "node_type": "memory",
+                        "type": "project",
+                        "originSessionId": "507e6cf4",
+                        "modified": "2026-10-01T00:00:00.000Z",
+                    },
+                },
+                "body\n",
+            ),
+            encoding="utf-8",
+        )
+        current = store.load(path)
+        self.assertEqual(current.meta["metadata"]["originSessionId"], "507e6cf4")
+        store.write(self.dir, "a.md", "new body", if_version=current.version)
+        self.assertNotIn("originSessionId", path.read_text())
 
     def test_a_refused_line_break_leaves_the_note_untouched(self):
         first = store.write(self.dir, "u.md", "x", description="before", if_version="new")

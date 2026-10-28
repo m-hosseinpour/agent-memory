@@ -35,6 +35,7 @@ relies on the version re-checks. Rebuilding the index is atomic.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,18 +82,19 @@ def after_change(directory: Path, keep: str | None = None) -> Stats:
 
     Best effort by design: the caller's change already landed, so a failure
     here is reported on stderr and left for the next pass instead of turning a
-    successful write into an error.
+    successful write into an error. The index is rebuilt once, at the end of
+    the pass; a pass that raises before reaching it falls back to a plain
+    rebuild so the caller's change still shows up in `MEMORY.md`.
     """
     stats = Stats(scopes=1)
-    try:
-        # The index must reflect the change even if the rules below fail.
-        index.rebuild(directory)
-    except OSError as exc:
-        _warn(f"index not rebuilt: {exc}")
     try:
         _consolidate(directory, stats, keep)
     except Exception as exc:  # a janitor must never break the caller's write
         _warn(f"consolidation skipped: {type(exc).__name__}: {exc}")
+        try:
+            index.rebuild(directory)
+        except OSError as rebuild_error:
+            _warn(f"index not rebuilt: {rebuild_error}")
     return stats
 
 
@@ -273,12 +275,26 @@ def _similar(first: str, second: str) -> bool:
 
 
 def _merge_body(keeper: str, other: str) -> str:
-    lines = keeper.splitlines()
-    known = {line.strip() for line in lines if line.strip()}
-    extra = [line for line in other.splitlines() if line.strip() and line.strip() not in known]
-    if not extra:
+    """Append the duplicate's own lines, keeping the blank lines between them.
+
+    Line-wise, so a line the keeper already has is not repeated; block-wise, so
+    the appended detail keeps the paragraph breaks `other` put it in instead of
+    collapsing into one run of lines. A line the duplicate repeats itself — a
+    `---` rule, a repeated line in a fenced block — is copied as written.
+    """
+    known = {line.strip() for line in keeper.splitlines() if line.strip()}
+    blocks: list[str] = []
+    for block in re.split(r"\n[ \t]*\n", other):
+        kept = []
+        for line in block.splitlines():
+            text = line.strip()
+            if text and text not in known:
+                kept.append(line.rstrip())
+        if kept:
+            blocks.append("\n".join(kept))
+    if not blocks:
         return keeper
-    return keeper.rstrip() + "\n\n" + "\n".join(extra)
+    return keeper.rstrip() + "\n\n" + "\n\n".join(blocks)
 
 
 def _warn(message: str) -> None:
