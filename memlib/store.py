@@ -383,5 +383,10 @@ def delete(directory: Path, filename: str, if_version: str | None = None) -> boo
 
 
 def tokens(text: str) -> set[str]:
-    """Words used to compare descriptions; shared with dream's duplicate rule."""
-    return {t for t in re.split(r"[^a-z0-9\u0600-\u06FF]+", text.lower()) if len(t) > 2}
+    """Words used to compare descriptions; shared with dream's duplicate rule.
+
+    Every word counts, however short. The rule compares the sets for identity,
+    and a short qualifier ("v2" versus "v3") is exactly what has to keep two
+    notes apart.
+    """
+    return {t for t in re.split(r"[^a-z0-9\u0600-\u06FF]+", text.lower()) if t}

@@ -10,9 +10,9 @@ What a pass does:
 
 * two files of the same type with the same `name` are one note — the newer
   `modified` wins and the older file is removed (its body is *not* merged);
-* two files of the same type whose descriptions overlap by at least 80% are
+* two files of the same type whose descriptions use exactly the same words are
   duplicates — the older's unique lines are appended to the newest and the
-  older file is removed;
+  older file is removed; a restatement in other words stays a separate note;
 * `MEMORY.md` is rebuilt from the files, so a line for a deleted file cannot
   survive.
 
@@ -40,9 +40,15 @@ from pathlib import Path
 
 from . import config, index, store
 
-# Two descriptions this close describe the same thing. Jaccard over words of
-# three or more characters, so "pnpm, not npm" and "use pnpm not npm" match.
-DUPLICATE_THRESHOLD = 0.8
+# Two notes share a description only when they use exactly the same words.
+# A lower cut-off cannot tell a restatement from a narrowed one: one added
+# qualifier keeps Jaccard at 0.86 ("deploy with make release and tag" vs
+# "... tag blue", "run unit tests before every commit" vs "... only") and
+# would delete an independent note. Word overlap alone cannot tell a filler
+# word ("use pnpm not npm") from a qualifier, so identity is the only safe
+# rule. Jaccard rather than string equality, so word order and punctuation
+# do not matter.
+DUPLICATE_THRESHOLD = 1.0
 
 
 @dataclass

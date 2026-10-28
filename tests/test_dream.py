@@ -41,9 +41,19 @@ class DreamTestCase(unittest.TestCase):
 
     # -- helpers ---------------------------------------------------------
 
-    def put(self, scope, filename, name, description, body="body", modified=OLD, kind="project"):
+    def put(
+        self,
+        scope,
+        filename,
+        name,
+        description,
+        body="body",
+        modified=OLD,
+        kind="project",
+        cwd=None,
+    ):
         """Write a memory file with an explicit `modified`, bypassing the clock."""
-        directory = config.scope_dir(scope, str(self.cwd))
+        directory = config.scope_dir(scope, str(cwd or self.cwd))
         directory.mkdir(parents=True, exist_ok=True)
         meta = {
             "name": name,
@@ -110,11 +120,11 @@ class ReplaceTests(DreamTestCase):
 
 
 class MergeTests(DreamTestCase):
-    """Same type + description overlap >= 0.8 = duplicates."""
+    """Same type + exactly the same description words = duplicates."""
 
     DESCRIPTION = "the lockfile is pnpm and npm install breaks CI"
 
-    def test_near_identical_descriptions_merge(self):
+    def test_the_same_description_merges(self):
         self.put("project", "a.md", "one", self.DESCRIPTION, body="first detail", modified=OLD)
         self.put("project", "b.md", "two", self.DESCRIPTION, body="second detail", modified=NEW)
         _, out = self.run_dream()
@@ -128,6 +138,47 @@ class MergeTests(DreamTestCase):
         body = store.load(self.directory() / "b.md").body
         self.assertIn("second detail", body)
         self.assertIn("first detail", body)
+
+    def test_a_narrowing_qualifier_is_not_merged(self):
+        # Each pair of descriptions shares nearly every word. At the old 0.8
+        # cut-off the older note was deleted and its title lost without a
+        # trace, so these pairs pin the rule down.
+        pairs = [
+            ("deploy with make release and tag", "deploy with make release and tag blue"),
+            ("run unit tests before every commit", "run unit tests before every commit only"),
+            (
+                "deploy to production with make release and tag",
+                "deploy to staging with make release and tag",
+            ),
+            ("pnpm, not npm", "use pnpm not npm"),
+        ]
+        for index, (first, second) in enumerate(pairs):
+            with self.subTest(descriptions=(first, second)):
+                cwd = self.root / f"pair-{index}"
+                cwd.mkdir()
+                self.put("project", "a.md", "one", first, modified=OLD, cwd=cwd)
+                self.put("project", "b.md", "two", second, modified=NEW, cwd=cwd)
+                directory = config.scope_dir("project", str(cwd))
+                stats = dream.after_change(directory)
+                self.assertEqual(stats.merged, 0)
+                self.assertEqual(
+                    sorted(path.name for path in directory.glob("*.md")),
+                    ["MEMORY.md", "a.md", "b.md"],
+                )
+
+    def test_the_same_words_in_another_order_still_merge(self):
+        self.put("project", "a.md", "one", "deploy with make release and tag", modified=OLD)
+        self.put("project", "b.md", "two", "tag and release: deploy with make", modified=NEW)
+        _, out = self.run_dream()
+        self.assertEqual(out["merged"], 1)
+        self.assertEqual(self.files(), ["MEMORY.md", "b.md"])
+
+    def test_similarity_requires_the_same_word_set(self):
+        self.assertFalse(dream._similar("release tag", "release tag blue"))
+        self.assertFalse(dream._similar("release tag v2", "release tag v3"))
+        self.assertTrue(dream._similar("release tag", "tag, release"))
+        self.assertFalse(dream._similar("", "release tag"))
+        self.assertFalse(dream._similar("", ""))
 
     def test_dissimilar_descriptions_are_kept_apart(self):
         self.put("project", "a.md", "one", "the lockfile is pnpm", modified=OLD)

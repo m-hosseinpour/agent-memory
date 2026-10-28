@@ -109,9 +109,9 @@ returning. The rules are deterministic — no model call:
 
 - two files of the same type with the same `name` are one note; the newer `modified` wins and
   the older file is removed (its body is **not** merged);
-- two files of the same type whose descriptions overlap by at least 80% (word Jaccard) are
-  duplicates: the older's unique lines are appended to the newest body, then the older file is
-  removed;
+- two files of the same type whose descriptions use exactly the same words (word Jaccard 1.0, so
+  word order and punctuation do not matter) are duplicates: the older's unique lines are appended
+  to the newest body, then the older file is removed;
 - `MEMORY.md` is rebuilt from the files, so a line for a deleted file cannot survive.
 
 A pass deletes a file only while its bytes still match what it read, and writes a merged keeper
@@ -119,9 +119,11 @@ with the version it read, so a concurrent agent either wins cleanly or leaves bo
 next pass. The pass is idempotent: running it twice changes nothing. `mem dream` runs it by hand
 (`--all` for every project).
 
-Rename-and-contradict is **not** detected — the same fact restated under a different `name` stays
-as two notes. That is deliberate: guessing it from text without a model is how the wrong half of
-a pair gets deleted.
+A restatement in other words is **not** merged, and rename-and-contradict is **not** detected —
+the same fact under a different `name` or in a differently worded `description` stays as two
+notes. That is deliberate: one added qualifier ("… tag blue", "… only") is what turns a
+duplicate into a different note, and guessing that from text without a model is how the wrong
+half of a pair gets deleted.
 
 ## Store layout
 

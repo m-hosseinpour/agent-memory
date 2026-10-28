@@ -10,7 +10,7 @@
 ## نقطهٔ شروع
 
 - نسخه ۰.۲.۰؛ وضعیت HEAD و working tree را با `git log -1` و `git status` ببینید.
-- تست پایه: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v` → ۱۲۰ تست سبز.
+- تست پایه: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v` → ۱۲۳ تست سبز.
   pytest نصب نیست و لازم هم نیست؛ تست‌های تازه را در همان فایل‌های موجود و با `unittest` بنویسید.
 - تصمیم‌های بسته در `docs/design.md` §۱۱ هستند؛ بدون دلیل تازه بازشان نکنید.
 - روش کار: اول بازتولید، بعد اصلاح، بعد همان بازتولید و همان تست‌ها دوباره. اگر تغییری رفتار
@@ -21,50 +21,8 @@
 
 | # | پرسش | پیشنهاد |
 |---|---|---|
-| D3 | آستانهٔ ادغام (۰.۸) عوض شود، شرط تازه بگیرد، یا فقط مستند شود؟ | اول روی دادهٔ واقعی بشمارید (با اجازهٔ کاربر)، بعد با کاربر تصمیم بگیرید. |
 | D4 | `description` چندخطی: رد شود یا پشتیبانی شود؟ | در نوشتن رد شود؛ پارس `>`/`\|` فقط اگر ارزان بود. |
 | D5 | `originSessionId` در نوشته‌های MCP: آرگومان `session` بگیرد یا فیلد حذف شود؟ | تصمیم با کاربر؛ تا آن‌وقت فیلد خالی دروغ است. |
-
-## D. ادغام ۰.۸ می‌تواند یادداشت را بی‌صدا حذف کند — P1 (تصمیم لازم)
-
-**اندازه‌گیری‌شده:** عددها Jaccard توکن‌های `store.tokens` هستند — همان چیزی که `_similar`
-با آستانهٔ ۰.۸ می‌سنجد.
-
-| description اول | description دوم | Jaccard | ادغام؟ |
-|---|---|---|---|
-| `pnpm, not npm` | `use pnpm not npm` | ۰.۷۵ | نه |
-| `deploy to production with make release and tag` | `deploy to staging with make release and tag` | ۰.۷۵ | نه |
-| `deploy with make release and tag` | `deploy with make release and tag blue` | ۰.۸۶ | **بله** |
-| `run unit tests before every commit` | `run unit tests before every commit only` | ۰.۸۶ | **بله** |
-
-پس کامنت [`memlib/dream.py:43-44`](memlib/dream.py#L43-L44) («pnpm … و use pnpm … match»)
-غلط است — آن جفت اصلاً ادغام نمی‌شود. در عوض جفت‌های بالا با هم‌نوعی یکسان ادغام می‌شوند:
-بدنهٔ خطوط یکتا به یادداشت تازه‌تر می‌چسبد و فایل قدیمی با description و نامش حذف می‌شود،
-بدون هیچ هشدار یا گزارشی. یک تغییر کوچک در جمله می‌تواند یک یادداشت مستقل را ببلعد.
-
-**بازتولید:**
-
-```bash
-export MEM_ROOT=$(mktemp -d) PROJ=$(mktemp -d)
-./bin/mem write --scope project --cwd "$PROJ" --path a.md --name release \
-  --description "deploy with make release and tag" --if-version new --content "run make release; tag vX"
-./bin/mem write --scope project --cwd "$PROJ" --path b.md --name release-blue \
-  --description "deploy with make release and tag blue" --if-version new --content "then tag blue too"
-ls "$MEM_ROOT"/projects/*/     # فقط MEMORY.md و b.md؛ a.md همان لحظه حذف شد
-```
-
-برای بازتولید حتی `mem dream` هم لازم نیست: تثبیت بعد از همان نوشتن دوم اجرا می‌شود.
-
-**کار:**
-
-1. با اجازهٔ کاربر، روی انبار واقعی بشمارید چند ادغام واقعی رخ داده (پیش از هر تغییر — این
-   عدد تصمیم را می‌سازد و بعد از پاک‌شدن قابل بازسازی نیست).
-2. گزینه‌ها را با کاربر ببرید: آستانه بالاتر؛ شرط «نام یکسان یا نزدیک» به‌علاوهٔ شباهت؛
-   `mem dream --dry-run` که فقط گزارش کند؛ یا نگه‌داشتن رفتار و مستندسازی صریح.
-3. مستقل از تصمیم: کامنت غلط را درست کنید و برای دو جفت بالا تست رگرسیون بگذارید (با
-   `MEM_ROOT` موقت) تا رفتار فعلی قفل شود.
-
-**معیار انجام:** رفتار ادغام یا مستند شده یا اصلاح شده؛ هیچ تستی به انبار واقعی دست نزند.
 
 ## E. `description` چندخطی فایل را خراب می‌کند — P2
 
@@ -99,7 +57,7 @@ ls "$MEM_ROOT"/projects/*/     # فقط MEMORY.md و b.md؛ a.md همان لحظ
 | F5 | [`docs/design.md:118`](docs/design.md#L118) | می‌گوید `memory_index` «متن `MEMORY.md`» را برمی‌گرداند؛ در واقع از روی فایل‌ها render می‌کند و فایل دست‌کاری‌شده را نمی‌خواند | «فهرست را از روی فایل‌ها می‌سازد و برمی‌گرداند» |
 | F6 | [`README.md:122-128`](README.md#L122-L128) | `PROTOCOL.md` در layout انبار آمده، ولی هیچ کدی نمی‌سازدش (فقط دستی کپی می‌شود) | layout را با «دستی کپی می‌شود» هم‌خوان کنید |
 | F7 | [`docs/roadmap.md:45`](docs/roadmap.md#L45) | معیار پذیرش «از Claude Code و opencode هم خوانده می‌شود» در این مخزن قابل بررسی نیست | علامت «تحقق‌نیافته» بزنید یا حذفش کنید |
-| F8 | `docs/operations.md` و README | بعد از اصلاح C/E، بخش «محدودیت‌ها» و «Consolidation» را با رفتار جدید هم‌خوان کنید | در همان commit اصلاح |
+| F8 | `docs/operations.md` و README | بعد از اصلاح E، بخش «محدودیت‌ها» و «Consolidation» را با رفتار جدید هم‌خوان کنید | در همان commit اصلاح |
 
 ## G. ریزها — P3
 
@@ -133,7 +91,7 @@ design §۹ و §۱۱. تصمیم‌های باز در design §۱۲
 ## پایان کار
 
 1. `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v` — همه سبز، با تست‌های تازه.
-2. بازتولیدهای C/E را دوباره اجرا کنید: هر کدام باید رفتار درست بدهد.
+2. بازتولید E را دوباره اجرا کنید: باید رفتار درست بدهد.
 3. `git diff` را بخوانید؛ هر تغییر در رفتار باید در README/design/operations منعکس شده باشد.
 4. اگر کاربر خواست، `uv tool install --reinstall .` تا ایجنت‌ها کد تازه را ببینند
    (وگرنه `mem` روی PATH همان نسخهٔ قدیمی می‌ماند).
