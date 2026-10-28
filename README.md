@@ -197,6 +197,11 @@ python3 -m unittest discover -s tests -v
 - **`mem read` takes a flat `.md` name.** `..`, absolute paths and `MEMORY.md` are refused; the
   generated index is `mem index`. A hand-written file with invalid UTF-8 is decoded with
   replacement characters instead of failing the command.
+- **The store is local to one machine.** There is no remote, no sync and no backup inside the
+  tool: the version token and the short-lived lock only protect writers on the same machine, and
+  a shared or network-backed store is not safe to write from two agents. Copy
+  `~/.agents/memory` elsewhere on a schedule if you want a backup; the tool will not do it.
 - **`PROTOCOL.md` is not part of the agent's onboarding.** The MCP `instructions` field is. The
-  protocol file is only for connecting an agent that has no MCP client.
+  protocol file is only for connecting an agent that has no MCP client, and the server never
+  exposes it as a tool or a resource.
 - When testing, set `MEM_ROOT` to a scratch directory. The default root is the real store.

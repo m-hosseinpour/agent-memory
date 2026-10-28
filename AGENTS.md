@@ -36,7 +36,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 - README and PROTOCOL are English; everything else is Persian, and so are the answers to the user.
 - Update README and `docs/` in the same change that alters behaviour, not in a later commit.
 - Do not reopen §11 of `design.md` without a new reason: no keyword search, no line cap on the
-  index, no config file, MCP-only, consolidation after every change.
+  index, no config file, MCP-only, consolidation after every change, the store stays local to one
+  machine (no remote or shared store), and `PROTOCOL.md` is not shown automatically.
 
 ## Code
 
