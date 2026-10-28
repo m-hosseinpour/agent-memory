@@ -1,0 +1,46 @@
+{
+  "autoMemoryEnabled": false,
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/mahdi/workspace/agent-memory/bin/mem hook session-start"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/mahdi/workspace/agent-memory/bin/mem hook user-prompt"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/mahdi/workspace/agent-memory/bin/mem hook stop"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/mahdi/workspace/agent-memory/bin/mem hook session-end",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

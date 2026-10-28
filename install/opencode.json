@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "~/.agents/memory/global/MEMORY.md"
+  ],
+  "mcp": {
+    "servers": {
+      "mem": {
+        "type": "local",
+        "command": ["mem", "mcp"]
+      }
+    }
+  }
+}

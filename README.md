@@ -12,8 +12,12 @@ Design and research behind it: `~/.dsh/memory-system/` (`research.md`, `design.m
 
 ## Status
 
-Phase P0 of the roadmap is implemented: store, index, versioned writes, lexical recall,
-and the CLI. Adapters (hooks, MCP, DSH plugin) are not written yet — see `HANDOFF.md`.
+Phase P0 is implemented: store, index, versioned writes, lexical recall, and the CLI.
+
+The four adapters are written: Claude Code hooks (`memlib/hooks.py`), the MCP stdio server
+(`memlib/mcp.py`), opencode (`integrations/opencode/`, V2 API), and DSH
+(`integrations/dsh/`). Still missing: `mem dream` and `mem extract`, so the extraction
+hooks are wired but no-op. See `HANDOFF.md`.
 
 ## Usage
 
@@ -32,6 +36,10 @@ EOF
 ./bin/mem index  --cwd "$PWD"                 # what gets injected into a prompt
 ./bin/mem recall "lockfile" --cwd "$PWD"      # only above select_threshold memories
 ./bin/mem forget --scope project --cwd "$PWD" --path pnpm-not-npm.md
+
+# adapters
+./bin/mem hook session-start < payload.json   # Claude Code hook (JSON in, JSON out)
+./bin/mem mcp                                 # MCP server on stdio
 ```
 
 Exit codes: `0` ok, `1` invalid input, `2` version conflict (current content is returned so
@@ -45,9 +53,12 @@ memlib/store.py      files, frontmatter, version tokens, conflicts, secret refus
 memlib/index.py      MEMORY.md generation and budget capping
 memlib/config.py     root, config.toml subset, scope directories
 memlib/cli.py        argparse surface
-tests/               unittest (stdlib only)
-integrations/        per-agent adapters (empty so far)
-install/             settings snippets to copy into each agent
+memlib/hooks.py      Claude Code hook adapter + the session counter (dream reuses it)
+memlib/mcp.py        MCP stdio server: memory_read / memory_write / memory_search
+tests/               unittest (stdlib only), 96 tests
+integrations/opencode/  opencode V2 plugin (session.idle, compaction hook)
+integrations/dsh/       cordis plugin (prompt section, pre-step, turn-stopping, tools)
+install/             merge fragments: claude-code.json, mcp.json, opencode.json
 ```
 
 ## Store layout
@@ -66,6 +77,7 @@ $MEM_ROOT/
 ## Tests
 
 ```bash
+export MEM_ROOT=$(mktemp -d)          # tests refuse to touch the real store
 python3 -m unittest discover -s tests -v
 ```
 

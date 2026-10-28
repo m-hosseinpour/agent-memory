@@ -27,11 +27,25 @@ be able to start here with no other context.
   ImportError until written — that is expected).
 - `tests/test_store.py`: 20 tests, all passing.
 
-## What is next — dispatch as four parallel agents
+## Done in P1 — the four adapters
 
-The interface is frozen; these four touch disjoint files, so they can run concurrently.
-Each brief: implement against `memlib/store.py` + `memlib/index.py`, keep stdlib only,
-add `unittest` tests next to the code, and do not modify the four P0 modules without saying so.
+All four were implemented, tested, and reviewed. `python3 -m unittest discover -s tests`
+runs 96 tests, all passing. Files: `memlib/hooks.py`, `memlib/mcp.py`,
+`integrations/opencode/`, `integrations/dsh/`, and three `install/*.json` fragments.
+
+Two deviations from the briefs below, both verified against the real host, **do not undo**:
+
+- **opencode is V2.** The `{ id, server }` + `event` + `experimental.session.compacting`
+  shape in brief C is the V1 API, and V1 plugins do not run in V2. opencode 2.1.4 is what is
+  installed here; its plugins are `{ id, setup(ctx) }`, `ctx.event.subscribe()`, and
+  `ctx.session.hook("compaction", …)` appending to `event.system`. The migration guide says
+  so explicitly.
+- **The `cordis-plugin-development` skill named in brief D is not installed.** Conventions
+  came from the working plugins in `~/.dsh/plugins/` and the runtime `.d.ts` files instead.
+
+Briefs kept for reference. Each one said: implement against `memlib/store.py` +
+`memlib/index.py`, keep stdlib only, add `unittest` tests next to the code, and do not
+modify the four P0 modules without saying so.
 
 ### A. Hooks adapter — `memlib/hooks.py`, `tests/test_hooks.py`, `install/claude-code.json`
 
@@ -81,7 +95,10 @@ add `unittest` tests next to the code, and do not modify the four P0 modules wit
 - Everything shells out to `mem`; no memory logic in the plugin.
 - Include `cordis.patch.yml` and a short README with the install steps.
 
-## Then, sequenced after those
+## What is next
+
+The adapters shell out to `mem dream` and `mem extract`, which do not exist yet, so the
+extraction hooks currently fail silently. Those two are the next work.
 
 1. `memlib/dream.py` + tests: session counter from `.state/state.json`, threshold
    `dream.every_sessions`, pid lockfile, merge duplicates (same type + near-identical
@@ -93,7 +110,12 @@ add `unittest` tests next to the code, and do not modify the four P0 modules wit
    strict JSON output, validate + secret-scan, then write via `store.write`. Default off.
 3. `tests/test_cli.py`: lock the CLI contract (exit codes, JSON shape, conflict payload).
 4. `PROTOCOL.md` in the store root + the few lines to add to `~/.agents/AGENTS.md`.
-5. Independent review pass over the whole change (fresh session or reviewer subagent).
+5. ~~MCP protocol era~~ — done. `memlib/mcp.py` answers the handshake (`initialize`,
+   2025-11-25) and the modern `server/discover` (2026-07-28) probe, and advertises both,
+   so a modern-only client is no longer locked out.
+
+The store counter that dream needs already exists in `memlib/hooks.py`
+(`session_count`, `bump_session`, `reset_sessions`) — import it, do not re-implement it.
 
 ## Decisions already made (do not re-litigate without a reason)
 
