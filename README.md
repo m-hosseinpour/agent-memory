@@ -116,9 +116,13 @@ Tools:
 | `memory_read` | `store`, `path`, `cwd?` | body, version, modified, type, description |
 | `memory_write` | `store`, `path`, `content`, `if_version`, `name?`, `description?`, `type?`, `cwd?` | the new version; consolidates the store first |
 
-The server's usage contract — the four types, what not to save, `if_version` — travels in the
-MCP `instructions` field of `initialize` / `server/discover`, which is what that field is for.
-No `AGENTS.md` section is needed.
+The server's usage contract — the two scopes, the four types, what not to save, `if_version` —
+travels in the MCP `instructions` field of `initialize` / `server/discover`, which is what that
+field is for. It opens with the session bootstrap: call `memory_index` with `cwd` before the
+first action, and again after a resume or compaction when the index is no longer in context.
+MCP has no channel that pushes the index into a client's context, so this contract is the
+portable way to get it in front of the model without an adapter per client. No `AGENTS.md`
+section is needed.
 
 `cwd` exists for clients that run one server for several projects (DSH does); a per-project
 client can omit it and the server uses its own working directory.

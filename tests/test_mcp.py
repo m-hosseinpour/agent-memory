@@ -185,6 +185,22 @@ class ToolsListTests(McpTestCase):
         self.assertIn("memory_index", init["instructions"])
         self.assertIn("memory_write", init["instructions"])
         self.assertNotIn("PROTOCOL", init["instructions"])
+        # Claude Code has one memory per project; the split is Qoder's, and an
+        # agent that is never told where a note goes picks the wrong store.
+        self.assertIn("Notes live in two scopes", init["instructions"])
+        for scope in mcp.STORES:
+            self.assertIn(f"'{scope}'", init["instructions"])
+        # Every type needs its own "when to save" line; a type the text forgot
+        # is a note the agent will never think to write.
+        for memory_type in store.TYPES:
+            self.assertIn(f"- {memory_type}:", init["instructions"])
+        # MCP has no channel that pushes the index into a client's context, so
+        # the only portable trigger is the contract: the first call of a
+        # session, and a repeat once the index is no longer in context.
+        self.assertIn("Session bootstrap", init["instructions"])
+        self.assertIn("compaction", init["instructions"])
+        # A client that drops the instructions still sends the tool schemas.
+        self.assertIn("before your first action", tools["memory_index"]["description"])
 
     def test_the_param_table_matches_the_schemas(self):
         """_TOOL_PARAMS decides what an unknown argument is, so it must not
