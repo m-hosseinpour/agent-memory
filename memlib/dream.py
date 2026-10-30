@@ -27,9 +27,10 @@ half of a pair.
 Concurrency: the pass itself takes no lock. It deletes a file only while its
 bytes still match what the pass read, and writes a merged keeper with the
 version it read, so a concurrent writer either wins cleanly or leaves both
-files for the next pass. `store.write` and `store.delete` do hold a short
-`flock` on the scope directory; this pass runs after that lock is released and
-relies on the version re-checks. Rebuilding the index is atomic.
+files for the next pass. `store.write` and `store.delete` do hold a short lock
+on the scope (the directory's inode on POSIX, one byte of `.mem.lock` on
+Windows); this pass runs after that lock is released and relies on the version
+re-checks. Rebuilding the index is atomic.
 """
 
 from __future__ import annotations

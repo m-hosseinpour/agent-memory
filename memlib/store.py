@@ -9,40 +9,27 @@ files stay readable by hand, by `grep`, and by other agents.
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import os
 import re
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
 TYPES = ("user", "feedback", "project", "reference")
 DEFAULT_TYPE = "project"
 MAX_BODY_BYTES = 100 * 1024
+LOCK_FILE = ".mem.lock"
+LOCK_TIMEOUT_SECONDS = 60
 
 _FM_RE = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*\n?", re.S)
-
-
-@contextmanager
-def _locked(directory: Path):
-    """Serialize the read-check-write (and read-check-unlink) in one scope.
-
-    The lock is the directory's own inode, so it leaves no file and no state
-    behind and the kernel drops it when the process exits. Without it the
-    `if_version` check is a check-then-act: two writers can both read the same
-    version, both pass, and one silently overwrites the other.
-    """
-    handle = os.open(directory, os.O_RDONLY)
-    try:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        yield
-    finally:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_UN)
-        finally:
-            os.close(handle)
 
 
 class StoreError(Exception):
@@ -57,6 +44,87 @@ class ConflictError(StoreError):
 
 class SecretError(StoreError):
     pass
+
+
+@contextmanager
+def _locked(directory: Path):
+    """Serialize the read-check-write (and read-check-unlink) in one scope.
+
+    On POSIX the lock is the directory's own inode: no file, no state, and the
+    kernel drops it when the process exits. Windows cannot lock a directory
+    handle, so there the lock is one byte of `LOCK_FILE` inside the scope. That
+    file is not state either: an unlocked `.mem.lock` is exactly as good as an
+    absent one, and the OS releases the lock when the owning process dies.
+
+    Without this lock the `if_version` check is a check-then-act: two writers
+    can both read the same version, both pass, and one silently overwrites the
+    other.
+    """
+    if os.name == "nt":
+        with _locked_windows(directory):
+            yield
+        return
+    handle = os.open(directory, os.O_RDONLY)
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        finally:
+            os.close(handle)
+
+
+@contextmanager
+def _locked_windows(directory: Path):
+    handle = os.open(directory / LOCK_FILE, os.O_CREAT | os.O_RDWR)
+    try:
+        deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                # Lock one byte from offset 0, non-blocking, so an unreleased
+                # lock cannot hang the caller for msvcrt's fixed 10s retries.
+                msvcrt.locking(handle, msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise StoreError(
+                        f"timed out after {LOCK_TIMEOUT_SECONDS}s waiting for the scope lock"
+                    ) from None
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            msvcrt.locking(handle, msvcrt.LK_UNLCK, 1)
+    finally:
+        os.close(handle)
+
+
+def normalize_newlines(text: str) -> str:
+    """Use LF everywhere, so one note has the same bytes on every OS."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def replace_file(target: Path, text: str) -> None:
+    """Write UTF-8 text with LF newlines, replacing `target` atomically.
+
+    `newline="\\n"` is explicit: Windows text mode would otherwise turn each LF
+    into CRLF, which changes a note's version bytes for no reason. `os.replace`
+    is retried only on Windows, where a reader that still has the destination
+    open makes the rename fail with a sharing violation for a few milliseconds;
+    that is not a permission problem, and POSIX needs no retry.
+    """
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8", newline="\n")
+    attempts = 20 if os.name == "nt" else 1
+    for attempt in range(attempts):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            if attempt + 1 == attempts:
+                raise
+            time.sleep(0.02)
 
 
 # Keys are matched as assignments, not as bare words, so that prose like
@@ -95,13 +163,16 @@ def version_of(data: bytes) -> str:
 def slug_for(cwd: str | os.PathLike[str]) -> str:
     """Map a working directory to a stable directory name.
 
-    `/home/u/proj` becomes `-home-u-proj`. It is close to, but not the same as,
-    Claude Code's directory name: this one keeps `.` and `_`, while Claude Code
-    turns every non-alphanumeric into `-` (`/home/u/.cache` becomes
-    `-home-u-.cache` here but `-home-u--cache` there). A name cannot be decoded
-    back, which is why migration reads the recorded cwd instead.
+    `/home/u/proj` becomes `-home-u-proj` and `C:\\Users\\u\\proj` becomes
+    `c--users-u-proj`: `normcase` folds the case on Windows, where the same
+    directory can arrive spelled with either case, so one project cannot end up
+    with two scopes. It is close to, but not the same as, Claude Code's
+    directory name: this one keeps `.` and `_`, while Claude Code turns every
+    non-alphanumeric into `-` (`/home/u/.cache` becomes `-home-u-.cache` here
+    but `-home-u--cache` there). A name cannot be decoded back, which is why
+    migration reads the recorded cwd instead.
     """
-    absolute = os.path.abspath(os.fspath(cwd))
+    absolute = os.path.normcase(os.path.abspath(os.fspath(cwd)))
     return re.sub(r"[^A-Za-z0-9._-]", "-", absolute)
 
 
@@ -123,8 +194,10 @@ def parse(text: str) -> tuple[dict, str]:
 
     Only the YAML subset this project writes is understood: scalars and one
     level of nesting. That is enough to round-trip our own files and to read
-    files written by Claude Code.
+    files written by Claude Code. CRLF and lone CR are read as line breaks, so
+    a note saved by a Windows editor still parses; the body is returned with LF.
     """
+    text = normalize_newlines(text)
     match = _FM_RE.match(text)
     if not match:
         return {}, text
@@ -268,8 +341,11 @@ def check_filename(filename: str) -> str:
         or not filename.endswith(".md")
     ):
         raise StoreError("filename must be a flat name ending in .md")
-    if filename == "MEMORY.md":
-        raise StoreError("MEMORY.md is the generated index, not a memory")
+    if filename.casefold() == "memory.md":
+        # Case-insensitive on purpose: on Windows (and on a case-insensitive
+        # macOS volume) `memory.md` is the generated index, and accepting it
+        # would let a note overwrite MEMORY.md itself.
+        raise StoreError("MEMORY.md is the generated index, not a memory (any case)")
     if any(ch in filename for ch in "\r\n\0"):
         raise StoreError("filename must not contain control characters")
     return filename
@@ -293,6 +369,8 @@ def validate(
     if description is not None:
         check_single_line(description, "description")
 
+    # The real write stores LF, so measure and scan the same bytes here.
+    body = normalize_newlines(body)
     encoded = body.encode("utf-8")
     if len(encoded) > MAX_BODY_BYTES:
         raise StoreError(f"body is {len(encoded)} bytes, over the {MAX_BODY_BYTES} cap")
@@ -332,6 +410,7 @@ def write(
     """
     # Refuse before touching the directory: a rejected write must leave no file
     # and no newly created scope behind.
+    body = normalize_newlines(body)
     validate(filename, body, name=name, description=description)
     if if_version is None and not force:
         raise StoreError("if_version is required (pass the version from read, or 'new')")
@@ -393,11 +472,9 @@ def write(
         }
         text = render(meta, body + "\n")
 
-        # Unique per process: two agents writing the same note must not interleave
-        # inside one temp file before either replaces it.
-        tmp = directory / f".{filename}.{os.getpid()}.tmp"
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, path)
+        # Unique per process: two agents writing the same note must not
+        # interleave inside one temp file before either replaces it.
+        replace_file(path, text)
     return load(path)
 
 

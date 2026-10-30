@@ -5,9 +5,29 @@ build-backend = "hatchling.build"
 [project]
 name = "agent-memory"
 dynamic = ["version"]
-description = "A markdown memory store shared by several coding agents"
+description = "A markdown memory store shared by several coding agents over MCP"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mahdi Hosseinpour" }]
+keywords = ["agents", "claude-code", "mcp", "memory", "markdown"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Documentation",
+  "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/m-hosseinpour/agent-memory"
+Issues = "https://github.com/m-hosseinpour/agent-memory/issues"
 
 [project.scripts]
 mem = "memlib.cli:main"

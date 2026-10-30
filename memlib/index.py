@@ -12,9 +12,9 @@ rather than save context.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
+from . import store
 from .store import TYPES, Memory, list_memories
 
 
@@ -44,11 +44,8 @@ def rebuild(directory: Path) -> str:
     text = render(list_memories(directory))
     header = "# Memory\n\n" if text else "# Memory\n\n_empty_\n"
     target = directory / "MEMORY.md"
-    # Atomic: another process may be reading the index while this one repairs
-    # it, and a half-written table of contents is worse than a stale one.
-    # Unique per process: two concurrent repairs must not interleave inside one
-    # temp file before either replaces the index.
-    tmp = directory / f".MEMORY.md.{os.getpid()}.tmp"
-    tmp.write_text(header + (text + "\n" if text else ""), encoding="utf-8")
-    os.replace(tmp, target)
+    # Atomic (and LF-only): another process may be reading the index while this
+    # one repairs it, and a half-written table of contents is worse than a stale
+    # one. `store.replace_file` owns the temp name and the Windows rename retry.
+    store.replace_file(target, header + (text + "\n" if text else ""))
     return text

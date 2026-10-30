@@ -68,8 +68,12 @@ def default_source() -> Path:
 
 
 def _claude_slug(cwd: str) -> str:
-    """Claude Code's directory name for a cwd: non-alphanumerics become `-`."""
-    return re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(cwd))
+    """Claude Code's directory name for a cwd: non-alphanumerics become `-`.
+
+    `normcase` makes the comparison case-insensitive on Windows, where the same
+    directory can be named with any casing; on POSIX it changes nothing.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "-", os.path.normcase(os.path.abspath(cwd)))
 
 
 def _mtime(path: Path) -> float:

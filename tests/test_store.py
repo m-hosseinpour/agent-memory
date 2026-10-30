@@ -33,6 +33,25 @@ class FrontmatterTests(unittest.TestCase):
         self.assertEqual(meta, {})
         self.assertEqual(body, "just text\n")
 
+    def test_a_crlf_note_parses_and_is_read_as_lf(self):
+        # A note saved by a Windows editor must not turn into a body-only file
+        # whose frontmatter (and so its type and description) is invisible.
+        meta, body = store.parse(
+            "---\r\n"
+            "name: a\r\n"
+            "description: d\r\n"
+            "metadata:\r\n"
+            "  type: user\r\n"
+            "---\r\n"
+            "\r\n"
+            "one\r\n"
+            "two\r\n"
+        )
+        self.assertEqual(meta["name"], "a")
+        self.assertEqual(meta["metadata"]["type"], "user")
+        self.assertEqual(body.strip(), "one\ntwo")
+        self.assertNotIn("\r", body)
+
 
 class WriteTests(unittest.TestCase):
     def setUp(self):
@@ -108,6 +127,19 @@ class WriteTests(unittest.TestCase):
         for name in ("../x.md", "x.txt", "MEMORY.md"):
             with self.assertRaises(store.StoreError):
                 store.write(self.dir, name, "body", if_version="new")
+
+    def test_the_index_name_is_reserved_in_any_case(self):
+        # On a case-insensitive volume `memory.md` *is* MEMORY.md, so accepting
+        # it would let a note replace the generated index.
+        for name in ("memory.md", "Memory.md"):
+            with self.subTest(name=name):
+                with self.assertRaises(store.StoreError):
+                    store.write(self.dir, name, "body", if_version="new")
+
+    def test_a_crlf_body_is_stored_as_lf(self):
+        memory = store.write(self.dir, "a.md", "one\r\ntwo\r\n", if_version="new")
+        self.assertEqual(memory.body, "one\ntwo")
+        self.assertNotIn(b"\r", (self.dir / "a.md").read_bytes())
 
     def test_unknown_type_is_refused(self):
         with self.assertRaises(store.StoreError):

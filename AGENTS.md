@@ -12,8 +12,13 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
   and use `unittest`.
 - Every `mem` command in a test or a check needs `MEM_ROOT=$(mktemp -d)`. The real store is
   `~/.agents/memory` and must not be touched.
-- `./bin/mem` runs the checkout. `mem` on `PATH` is the installed copy and may be stale; to run the
-  new code there you need `uv tool install --reinstall .` (see below).
+- `./bin/mem` runs the checkout on POSIX, `bin\mem.cmd` on Windows; `python -m memlib` works on
+  both. `mem` on `PATH` is the installed copy and may be stale; to run the new code there you need
+  `uv tool install --reinstall .` (see below).
+- On Windows, drop the `PYTHONDONTWRITEBYTECODE=1`/`python3` shell prefix and run
+  `python -m unittest discover -s tests -v`; a scratch root is `$env:MEM_ROOT`. The suite must stay
+  green on Linux and Windows: anything POSIX-only (the `bin/mem` launcher) is guarded with
+  `skipUnless`, and no module may import `fcntl` at the top level.
 
 ## Install
 
@@ -25,7 +30,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 
 | File | Role |
 |---|---|
-| `README.md` | intro, install, agent wiring |
+| `README.md` | intro, install, MCP, manual usage, Windows |
 | `PROTOCOL.md` | hand-written connectivity guide for agents without an MCP client |
 | `docs/design.md` | the design and rejected options; §11 is the closed decisions |
 | `docs/operations.md` | this machine's state and setup |
@@ -44,6 +49,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 - Python ≥ 3.11, standard library only; do not add dependencies.
 - `memlib/` is the only code package and `bin/mem` is just a launcher. CLI and MCP both go through
   `memlib.store`, so do not build the same logic twice.
+- Cross-platform rules: write files as UTF-8 with `newline="\n"` (use `store.replace_file`), read
+  CRLF via `store.parse`, and keep the POSIX/Windows lock split inside `store._locked`. Windows
+  cannot import `fcntl` or lock a directory handle, so a module-level `fcntl` import breaks the tool.
 
 ## Git
 

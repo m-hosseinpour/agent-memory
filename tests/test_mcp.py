@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -963,8 +964,7 @@ class DiscoveryTests(McpTestCase):
 
 
 class SubprocessTests(McpTestCase):
-    def test_bin_mem_mcp_speaks_line_delimited_json(self):
-        launcher = REPO_ROOT / "bin" / "mem"
+    def test_module_mcp_speaks_line_delimited_json(self):
         messages = [
             self.request("initialize", {"protocolVersion": "2025-06-18"}, request_id=1),
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
@@ -990,8 +990,11 @@ class SubprocessTests(McpTestCase):
         env = os.environ.copy()
         env["MEM_ROOT"] = str(self.root)
         env["MEMORY_PROJECT_CWD"] = str(self.project)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(REPO_ROOT), env.get("PYTHONPATH", "")]
+        ).rstrip(os.pathsep)
         process = subprocess.run(
-            ["bash", str(launcher), "mcp"],
+            [sys.executable, "-m", "memlib", "mcp"],
             input="".join(json.dumps(message) + "\n" for message in messages),
             text=True,
             capture_output=True,
@@ -1018,6 +1021,19 @@ class SubprocessTests(McpTestCase):
 
         self.assertTrue((self.project_dir() / "from-subprocess.md").is_file())
         self.assertTrue((self.project_dir() / "MEMORY.md").is_file())
+
+    @unittest.skipUnless(os.name != "nt", "bin/mem is the POSIX development launcher")
+    def test_bin_mem_launcher_prints_the_version(self):
+        # The module above is the cross-platform path; this keeps the no-install
+        # launcher from rotting on the platforms that have bash.
+        process = subprocess.run(
+            ["bash", str(REPO_ROOT / "bin" / "mem"), "--version"],
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertRegex(process.stdout.strip(), r"^mem \d+\.\d+\.\d+$")
 
 
 if __name__ == "__main__":

@@ -17,7 +17,22 @@ import json
 import sys
 from pathlib import Path
 
-from . import config, dream, index, migrate, store
+from . import __version__, config, dream, index, migrate, store
+
+
+def _utf8_streams() -> None:
+    """Use UTF-8 on every stream, so a note in any language survives Windows.
+
+    A console or a pipe on Windows defaults to the ANSI code page, and printing
+    JSON with `ensure_ascii=False` would then raise UnicodeEncodeError halfway
+    through a command. Newline translation is turned off for output: the JSON
+    contract is one line per call, not CRLF per line.
+    """
+    for stream, newline in ((sys.stdin, None), (sys.stdout, "\n"), (sys.stderr, "\n")):
+        try:
+            stream.reconfigure(encoding="utf-8", newline=newline)
+        except (AttributeError, ValueError):
+            pass
 
 
 def _read_content(args) -> str:
@@ -175,6 +190,7 @@ class _Parser(argparse.ArgumentParser):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="mem", description="Agent-agnostic memory store")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--root", help="override the memory root (default ~/.agents/memory)")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -259,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _utf8_streams()
     args = build_parser().parse_args(argv)
     if getattr(args, "root", None):
         import os

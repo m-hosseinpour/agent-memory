@@ -8,7 +8,8 @@ session is available in the others.
 
 - `global/MEMORY.md` — preferences and facts that apply everywhere;
 - `projects/<sanitized-cwd>/MEMORY.md` — notes for one working directory
-  (`/home/u/proj` becomes `-home-u-proj`).
+  (`/home/u/proj` becomes `-home-u-proj`; on Windows `C:/Users/u/proj` becomes
+  `c--users-u-proj`).
 
 Each line is `- [Title](file.md) — description`. Read a note's body only when its line looks
 relevant to the task at hand; the index is cheap, the bodies are not.
