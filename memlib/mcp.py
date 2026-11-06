@@ -69,16 +69,26 @@ INTERNAL_ERROR = -32603
 # The first sentence is a bootstrap, not a suggestion: MCP has no channel that
 # pushes the index into a client's context, so a per-client adapter is the only
 # alternative — and the contract has to stay agent-agnostic.
+#
+# "Once per conversation" is load-bearing, not style. The earlier wording
+# ("never answer from an index you saw only in an earlier context") was read by
+# a model as "any earlier turn", so it re-took the index at the start of every
+# new user task — one measured session took it on 6 of 7 messages with no
+# compaction anywhere in the record. The repeat costs a round trip and buys
+# nothing, because the index the client already holds is in the same context.
 INSTRUCTIONS = (
     "Shared memory store for coding agents: plain markdown notes on disk, one "
     "note per file, shared by every agent connected to this store.\n"
     "\n"
-    "Session bootstrap: before your first action in a session, call "
-    "memory_index with cwd set to the session's working directory, then "
-    "memory_read the notes that apply. Call it again whenever the index is not "
-    "visible in the current context — after a resume or a compaction — and "
-    "never answer from an index you saw only in an earlier context. The index "
-    "is cheap and uncapped; a note's description says when it applies.\n"
+    "Session bootstrap: take the index once — before your first action in a "
+    "session, call memory_index with cwd set to the session's working "
+    "directory, then memory_read the notes that apply. A later user message in "
+    "the same conversation is not a new session and needs no second call: the "
+    "result stays usable while it is still in the context. Call it again only "
+    "when the index is no longer there at all — after a compaction, or in a "
+    "session resumed without its earlier turns — and never answer from an index "
+    "the context no longer holds. The index is cheap and uncapped; a note's "
+    "description says when it applies.\n"
     "\n"
     "Notes live in two scopes, and the index lists both: 'project' holds what "
     "is true of this repository — codebase rules, procedures learned here, "
@@ -144,8 +154,9 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "description": (
                 "List the notes in the shared store: a one-line entry per memory "
                 "(title, file name, description), grouped by type, for the global "
-                "and the project store. Call it before your first action in a "
-                "session, and again whenever the index is no longer in context; "
+                "and the project store. Call it once, before your first action in "
+                "a session, and only again once the index is no longer in context "
+                "— never on each new user message; "
                 "pass cwd when the server serves several projects. Read an entry "
                 "with memory_read before relying on it."
             ),

@@ -200,6 +200,15 @@ class ToolsListTests(McpTestCase):
         # session, and a repeat once the index is no longer in context.
         self.assertIn("Session bootstrap", init["instructions"])
         self.assertIn("compaction", init["instructions"])
+        # Once per conversation, not once per user message. The earlier wording
+        # ("never answer from an index you saw only in an earlier context") was
+        # read as "any earlier turn" and re-took the index at the start of every
+        # new task; this sentence is what forbids that.
+        self.assertIn("is not a new session", init["instructions"])
+        self.assertIn(
+            "never on each new user message",
+            tools["memory_index"]["description"],
+        )
         # A client that drops the instructions still sends the tool schemas.
         self.assertIn("before your first action", tools["memory_index"]["description"])
 
